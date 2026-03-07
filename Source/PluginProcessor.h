@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include "LossEngine.h"
 
 class ArtifactAudioProcessor : public juce::AudioProcessor
 {
@@ -34,12 +35,25 @@ public:
     void setStateInformation(const void* data, int sizeInBytes) override;
 
     //==============================================================================
-    // The APVTS — every parameter lives here
     juce::AudioProcessorValueTreeState apvts;
 
 private:
-    // Builds the full parameter layout — called once in the constructor
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+    // ── Phase 2: Loss Engine ──────────────────────────────────────────────────
+    LossEngine lossEngineL;
+    LossEngine lossEngineR;
+
+    juce::AudioBuffer<float> dryBuffer;
+
+    static int hopSizeFromSpeed(float lossSpeed)
+    {
+        const int hopSize = (int)juce::jmap(lossSpeed,
+            100.0f, 0.0f,
+            (float)(LossEngine::fftSize / 8),
+            (float)(LossEngine::fftSize / 2));
+        return juce::jlimit(32, LossEngine::fftSize / 2, hopSize);
+    }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ArtifactAudioProcessor)
 };
