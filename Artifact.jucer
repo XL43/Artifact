@@ -6,6 +6,9 @@
               pluginCode="ARTF">
   <MAINGROUP id="TXqQi9" name="Artifact">
     <GROUP id="{86B9ACA4-4185-CE1B-7FE6-60B28FD7D494}" name="Source">
+      <FILE id="bjPVoY" name="PresetManager.cpp" compile="1" resource="0"
+            file="Source/PresetManager.cpp"/>
+      <FILE id="bAFnJY" name="PresetManager.h" compile="0" resource="0" file="Source/PresetManager.h"/>
       <FILE id="LynVTT" name="ReverbEngine.cpp" compile="1" resource="0"
             file="Source/ReverbEngine.cpp"/>
       <FILE id="bkkPXP" name="ReverbEngine.h" compile="0" resource="0" file="Source/ReverbEngine.h"/>

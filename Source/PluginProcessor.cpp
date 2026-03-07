@@ -159,7 +159,8 @@ ArtifactAudioProcessor::ArtifactAudioProcessor()
     : AudioProcessor(BusesProperties()
         .withInput("Input", juce::AudioChannelSet::stereo(), true)
         .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-    apvts(*this, nullptr, "Parameters", createParameterLayout())
+    apvts(*this, nullptr, "Parameters", createParameterLayout()),
+    presetManager(apvts)
 {
 }
 
@@ -412,17 +413,12 @@ void ArtifactAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 //==============================================================================
 void ArtifactAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
-    auto state = apvts.copyState();
-    std::unique_ptr<juce::XmlElement> xml(state.createXml());
-    copyXmlToBinary(*xml, destData);
+    presetManager.saveStateToMemoryBlock(destData);
 }
 
 void ArtifactAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
-    std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
-    if (xmlState != nullptr)
-        if (xmlState->hasTagName(apvts.state.getType()))
-            apvts.replaceState(juce::ValueTree::fromXml(*xmlState));
+    presetManager.loadStateFromMemoryBlock(data, sizeInBytes);
 }
 
 //==============================================================================

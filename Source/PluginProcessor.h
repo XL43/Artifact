@@ -4,6 +4,7 @@
 #include "NoiseGenerator.h"
 #include "FilterSection.h"
 #include "ReverbEngine.h"
+#include "PresetManager.h"
 
 class ArtifactAudioProcessor : public juce::AudioProcessor
 {
@@ -39,6 +40,9 @@ public:
 
     //==============================================================================
     juce::AudioProcessorValueTreeState apvts;
+
+    // ── Preset Manager — public so GUI can call save/load/browse ─────────────
+    PresetManager presetManager;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
