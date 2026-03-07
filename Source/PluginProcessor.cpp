@@ -426,7 +426,7 @@ bool ArtifactAudioProcessor::hasEditor() const { return true; }
 
 juce::AudioProcessorEditor* ArtifactAudioProcessor::createEditor()
 {
-    return new juce::GenericAudioProcessorEditor(*this);
+    return new ArtifactAudioProcessorEditor(*this);
 }
 
 const juce::String ArtifactAudioProcessor::getName() const { return JucePlugin_Name; }
