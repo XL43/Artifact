@@ -209,7 +209,10 @@ void ArtifactAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const float noiseAmount = apvts.getRawParameterValue(ParamIDs::noiseAmount)->load() / 100.0f;
     const float noiseBias = apvts.getRawParameterValue(ParamIDs::noiseBias)->load();
     const bool  noiseEnabled = apvts.getRawParameterValue(ParamIDs::noiseEnabled)->load() > 0.5f;
-    const float verbAmount = apvts.getRawParameterValue(ParamIDs::verbAmount)->load() / 100.0f;
+
+    const float verbAmountRaw = apvts.getRawParameterValue(ParamIDs::verbAmount)->load() / 100.0f;
+    const float verbAmount = verbAmountRaw * magnitude;
+
     const float verbDecay = apvts.getRawParameterValue(ParamIDs::verbDecay)->load() / 100.0f;
     const float lowCutHz = apvts.getRawParameterValue(ParamIDs::lowCutFreq)->load();
     const float highCutHz = apvts.getRawParameterValue(ParamIDs::highCutFreq)->load();
@@ -246,9 +249,14 @@ void ArtifactAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const int   hopSize = hopSizeFromSpeed(lossSpeed);
 
     // ── 6. Filter (pre-Loss) ──────────────────────────────────────────────────
-    const bool filterActive = (lowCutHz > 21.0f || highCutHz < 19999.0f);
+    // Magnitude blends cutoff frequencies toward full-open range.
+    // At magnitude = 0: lowCut = 20Hz, highCut = 20kHz → effectively bypassed.
+    // At magnitude = 1: cutoffs are exactly as the user set them.
+    const float magLowCut = juce::jmap(magnitude, 0.0f, 1.0f, 20.0f, lowCutHz);
+    const float magHighCut = juce::jmap(magnitude, 0.0f, 1.0f, 20000.0f, highCutHz);
+    const bool filterActive = (magLowCut > 21.0f || magHighCut < 19999.0f);
     if (filterActive)
-        filterSection.processBlock(buffer, filterMode, lowCutHz, highCutHz, filterSlope);
+        filterSection.processBlock(buffer, filterMode, magLowCut, magHighCut, filterSlope);
 
     // ── 7. Verb Pre ───────────────────────────────────────────────────────────
     if (verbPosition == 0 && verbAmount > 0.0001f)
