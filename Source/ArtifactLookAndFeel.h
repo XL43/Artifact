@@ -4,15 +4,15 @@
 class ArtifactLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
-    static constexpr uint32_t colBackground = 0xff101012;
-    static constexpr uint32_t colPanel = 0xff1a1a1e;
-    static constexpr uint32_t colPanelBorder = 0xff2c2c34;
-    static constexpr uint32_t colAccent = 0xffff8c00;
-    static constexpr uint32_t colAccentDim = 0xff6b3a00;
-    static constexpr uint32_t colText = 0xffdddad4;
-    static constexpr uint32_t colTextDim = 0xff666460;
-    static constexpr uint32_t colKnobBg = 0xff222226;
-    static constexpr uint32_t colKnobTrack = 0xff3a3a40;
+    static constexpr uint32_t colBackground = 0xff0d0b11;  // near-black, slight purple tint
+    static constexpr uint32_t colPanel = 0xff1a1822;  // dark panel, more purple than bg
+    static constexpr uint32_t colPanelBorder = 0xff312c3e;  // medium purple-grey border
+    static constexpr uint32_t colAccent = 0xff8a72a0;  // lighter, more saturated — main interactive
+    static constexpr uint32_t colAccentDim = 0xff3d3350;  // dark muted purple — active backgrounds
+    static constexpr uint32_t colText = 0xffe0dce8;  // near-white with purple tint
+    static constexpr uint32_t colTextDim = 0xff7a7088;  // muted purple-grey for labels
+    static constexpr uint32_t colKnobBg = 0xff161420;  // very dark, deeper than panel
+    static constexpr uint32_t colKnobTrack = 0xff4a4260;  // mid purple for inactive arc
 
     ArtifactLookAndFeel()
     {

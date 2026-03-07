@@ -5,6 +5,7 @@
 #include "FilterSection.h"
 #include "ReverbEngine.h"
 #include "PresetManager.h"
+#include "SpectrumAnalyser.h"
 
 class ArtifactAudioProcessor : public juce::AudioProcessor
 {
@@ -43,6 +44,9 @@ public:
 
     // ── Preset Manager — public so GUI can call save/load/browse ─────────────
     PresetManager presetManager;
+
+    // ── Spectrum Analyser — GUI reads, audio thread writes ────────────────────
+    SpectrumAnalyser spectrumAnalyser;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();

@@ -72,6 +72,9 @@ private:
     using CA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using BA = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
+    // ── Spectrum Analyser ─────────────────────────────────────────────────────
+    SpectrumAnalyser& spectrumAnalyser;
+
     std::unique_ptr<CA> lossModeAttach, codecModeAttach;
     std::unique_ptr<SA> lossAmountAttach, lossSpeedAttach, lossGainAttach;
     std::unique_ptr<BA> noiseEnabledAttach;

@@ -2,10 +2,11 @@
 
 //==============================================================================
 ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcessor& p)
-    : AudioProcessorEditor(&p), audioProcessor(p)
+    : AudioProcessorEditor(&p), audioProcessor(p),
+    spectrumAnalyser(p.spectrumAnalyser)   // ← add this
 {
     setLookAndFeel(&laf);
-    setSize(860, 540);
+    setSize(860, 610);
 
     auto& apvts = audioProcessor.apvts;
 
@@ -60,6 +61,8 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
     addAndMakeVisible(presetPrevBtn);
     addAndMakeVisible(presetNextBtn);
     addAndMakeVisible(presetSaveBtn);
+
+    addAndMakeVisible(spectrumAnalyser);
 
     // ── Loss ──────────────────────────────────────────────────────────────────
     lossModeCombo.addItemList({ "Standard", "Inverse", "Phase Jitter",
@@ -224,7 +227,7 @@ void ArtifactAudioProcessorEditor::paint(juce::Graphics& g)
     g.fillAll(juce::Colour(ArtifactLookAndFeel::colBackground));
 
     // Subtle grid texture
-    g.setColour(juce::Colour(0xff141416));
+    g.setColour(juce::Colour(0xff131218));
     for (int x = 0; x < getWidth(); x += 20)
         g.drawVerticalLine(x, 0.0f, (float)getHeight());
     for (int y = 0; y < getHeight(); y += 20)
@@ -247,7 +250,7 @@ void ArtifactAudioProcessorEditor::paint(juce::Graphics& g)
     const int col3X = pad + 2 * (colW + gap);
     const int col3W = getWidth() - col3X - pad;
     const int row1Y = barH + pad;
-    const int row2Y = row1Y + row1H + gap;
+    const int row2Y = row1Y + row1H + 62;  // extra space for analyser strip
 
     drawSection(g, { col1X, row1Y, colW,  row1H }, "LOSS");
     drawSection(g, { col2X, row1Y, colW,  row1H }, "NOISE");
@@ -272,7 +275,7 @@ void ArtifactAudioProcessorEditor::resized()
     const int col3X = pad + 2 * (colW + gap);
     const int col3W = getWidth() - col3X - pad;
     const int row1Y = barH + pad;
-    const int row2Y = row1Y + row1H + gap;
+    const int row2Y = row1Y + row1H + 62;
 
     // ── Preset bar ────────────────────────────────────────────────────────────
     pluginNameLabel.setBounds(10, 0, 120, barH);
@@ -418,4 +421,9 @@ void ArtifactAudioProcessorEditor::resized()
         placeKnob(autoGainSlider, autoGainLabel, sx, y, cellW);
         placeKnob(gateThreshSlider, gateThreshLabel, sx + cellW, y, cellW);
     }
+
+    // ── Spectrum Analyser — full width strip between the two section rows ─────
+    // Sits in the gap between row 1 and row 2 panels
+    // We'll expand the layout slightly to make room — add 60px to the gap
+    spectrumAnalyser.setBounds(pad, row1Y + row1H + 2, getWidth() - 2 * pad, 54);
 }

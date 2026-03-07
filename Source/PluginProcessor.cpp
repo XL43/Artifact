@@ -274,19 +274,10 @@ void ArtifactAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 effectiveNoise, noiseColor, noiseBias);
     }
 
-    // ── 9. Stereo Mode routing + Loss Engine ──────────────────────────────────
-    // Measure pre-Loss RMS for Auto Gain compensation
-    float preLossRMS = 0.0f;
-    if (autoGainAmt > 0.0001f)
-    {
-        for (int ch = 0; ch < numChannels; ++ch)
-        {
-            auto* data = buffer.getReadPointer(ch);
-            for (int i = 0; i < numSamples; ++i)
-                preLossRMS += data[i] * data[i];
-        }
-        preLossRMS = std::sqrt(preLossRMS / (float)(numSamples * numChannels));
-    }
+    // ── 9. Loss Engine ────────────────────────────────────────────────────────
+    // Push pre-loss samples to analyser (left channel only — single channel display)
+    if (numChannels >= 1)
+        spectrumAnalyser.pushSamples(buffer.getReadPointer(0), numSamples, true);
 
     if (stereoMode == 2) // Mono — sum L+R to centre
     {
@@ -345,26 +336,39 @@ void ArtifactAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 effectiveLoss, hopSize, lossMode, codecMode, perceptual);
     }
 
+    // Push post-loss samples to analyser
+    if (numChannels >= 1)
+        spectrumAnalyser.pushSamples(buffer.getReadPointer(0), numSamples, false);
+
     // ── 10. Auto Gain compensation ────────────────────────────────────────────
-    // Measures post-Loss RMS and applies compensating gain to match pre-Loss level.
-    // Blended by autoGainAmt so 0% = no compensation, 100% = full compensation.
-    if (autoGainAmt > 0.0001f && preLossRMS > 0.0001f)
+    float preLossRMS = 0.0f;
+    float postLossRMS = 0.0f;
+
+    if (autoGainAmt > 0.0001f)
     {
-        float postLossRMS = 0.0f;
+        // Measure pre-loss RMS (we need to have stored this before the loss engine ran)
+        // Re-measure from dry buffer as proxy for pre-loss level
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            auto* data = dryBuffer.getReadPointer(ch);
+            for (int i = 0; i < numSamples; ++i)
+                preLossRMS += data[i] * data[i];
+        }
+        preLossRMS = std::sqrt(preLossRMS / (float)(numSamples * juce::jmax(numChannels, 1)));
+
+        // Measure post-loss RMS
         for (int ch = 0; ch < numChannels; ++ch)
         {
             auto* data = buffer.getReadPointer(ch);
             for (int i = 0; i < numSamples; ++i)
                 postLossRMS += data[i] * data[i];
         }
-        postLossRMS = std::sqrt(postLossRMS / (float)(numSamples * numChannels));
+        postLossRMS = std::sqrt(postLossRMS / (float)(numSamples * juce::jmax(numChannels, 1)));
 
-        if (postLossRMS > 0.0001f)
+        if (preLossRMS > 0.0001f && postLossRMS > 0.0001f)
         {
-            // Compensating gain — clamped to max +18dB to prevent blowups
-            const float compensationGain = juce::jlimit(0.0f, 8.0f,
-                preLossRMS / postLossRMS);
-            // Blend: 0% autoGain = gain of 1.0, 100% = full compensation
+            const float rawGain = preLossRMS / postLossRMS;
+            const float compensationGain = juce::jlimit(0.0f, 8.0f, rawGain);
             const float blendedGain = 1.0f + (compensationGain - 1.0f) * autoGainAmt;
             for (int ch = 0; ch < numChannels; ++ch)
                 buffer.applyGain(ch, 0, numSamples, blendedGain);

@@ -6,6 +6,10 @@
               pluginCode="ARTF">
   <MAINGROUP id="TXqQi9" name="Artifact">
     <GROUP id="{86B9ACA4-4185-CE1B-7FE6-60B28FD7D494}" name="Source">
+      <FILE id="YI9XjS" name="SpectrumAnalyser.cpp" compile="1" resource="0"
+            file="Source/SpectrumAnalyser.cpp"/>
+      <FILE id="cx4JGq" name="SpectrumAnalyser.h" compile="0" resource="0"
+            file="Source/SpectrumAnalyser.h"/>
       <FILE id="TKSG7o" name="ArtifactLookAndFeel.h" compile="0" resource="0"
             file="Source/ArtifactLookAndFeel.h"/>
       <FILE id="bjPVoY" name="PresetManager.cpp" compile="1" resource="0"
