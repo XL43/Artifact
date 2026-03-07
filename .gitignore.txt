@@ -1,0 +1,10 @@
+**/.vs/
+*.user
+*.suo
+**/x64/
+**/Debug/
+**/Release/
+Builds/VisualStudio2026/x64/
+*.jucer.bak
+.DS_Store
+Thumbs.db
