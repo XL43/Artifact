@@ -16,7 +16,6 @@ private:
     ArtifactAudioProcessor& audioProcessor;
     ArtifactLookAndFeel     laf;
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
     void setupRotary(juce::Slider& s, juce::Label& l, const juce::String& text);
     void setupCombo(juce::ComboBox& cb, juce::Label& l, const juce::String& text);
     void drawSection(juce::Graphics& g, juce::Rectangle<int> b, const juce::String& title) const;
@@ -27,6 +26,10 @@ private:
     juce::TextButton presetPrevBtn{ "<" };
     juce::TextButton presetNextBtn{ ">" };
     juce::TextButton presetSaveBtn{ "SAVE" };
+    juce::TextButton presetInitBtn{ "INIT" };
+    juce::TextButton starBtn{ "FAV" };
+    juce::TextButton shuffleBtn{ "RND" };
+    juce::TextButton diceBtn{ "RAND" };
     juce::Label      presetNameLabel;
 
     // ── Loss ──────────────────────────────────────────────────────────────────
@@ -67,13 +70,13 @@ private:
     juce::Slider   autoGainSlider, gateThreshSlider;
     juce::Label    autoGainLabel, gateThreshLabel;
 
+    // ── Spectrum ──────────────────────────────────────────────────────────────
+    SpectrumAnalyser& spectrumAnalyser;
+
     // ── Attachments ───────────────────────────────────────────────────────────
     using SA = juce::AudioProcessorValueTreeState::SliderAttachment;
     using CA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using BA = juce::AudioProcessorValueTreeState::ButtonAttachment;
-
-    // ── Spectrum Analyser ─────────────────────────────────────────────────────
-    SpectrumAnalyser& spectrumAnalyser;
 
     std::unique_ptr<CA> lossModeAttach, codecModeAttach;
     std::unique_ptr<SA> lossAmountAttach, lossSpeedAttach, lossGainAttach;

@@ -48,6 +48,10 @@ public:
     // ── Spectrum Analyser — GUI reads, audio thread writes ────────────────────
     SpectrumAnalyser spectrumAnalyser;
 
+    // ── Parameter utilities ───────────────────────────────────────────────────
+    void randomizeParameters();
+    void initializeParameters();
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 

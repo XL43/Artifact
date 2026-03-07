@@ -448,3 +448,31 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new ArtifactAudioProcessor();
 }
+
+//==============================================================================
+void ArtifactAudioProcessor::randomizeParameters()
+{
+    std::mt19937 rng{ std::random_device{}() };
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+    for (auto* param : getParameters())
+    {
+        // Skip bypass — don't randomly bypass the plugin
+        if (param->getName(256).containsIgnoreCase("bypass"))
+            continue;
+
+        // Skip noise enabled — don't randomly enable noise unexpectedly
+        if (param->getName(256).containsIgnoreCase("noise") &&
+            param->getName(256).containsIgnoreCase("enable"))
+            continue;
+
+        param->setValueNotifyingHost(dist(rng));
+    }
+}
+
+//==============================================================================
+void ArtifactAudioProcessor::initializeParameters()
+{
+    for (auto* param : getParameters())
+        param->setValueNotifyingHost(param->getDefaultValue());
+}

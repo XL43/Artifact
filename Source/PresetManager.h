@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <random>
 
 /*  PresetManager — handles all save/load/browse operations for Artifact.
 
@@ -17,7 +18,7 @@ class PresetManager
 public:
     // File extension for preset files
     static constexpr const char* presetExtension = ".artifact";
-    static constexpr const char* presetWildcard = "*.artifact";
+    static constexpr const char* presetWildcard = "*.artifact"; 
     static constexpr const char* manufacturerName = "lickm";   // ← change to yours
     static constexpr const char* pluginName = "Artifact";
 
@@ -66,6 +67,33 @@ public:
     // These are wrappers around APVTS XML read/write
     void saveStateToMemoryBlock(juce::MemoryBlock& destData) const;
     void loadStateFromMemoryBlock(const void* data, int sizeInBytes);
+
+    // Installs factory presets to user folder if not already present.
+    // Called once on first launch — never overwrites existing user presets.
+    void installFactoryPresets();
+
+    // ── Favourites ────────────────────────────────────────────────────────────
+    void toggleFavourite(const juce::String& presetName);
+    bool isFavourite(const juce::String& presetName) const;
+    juce::StringArray getFavouriteNames() const;
+
+    // ── Random preset ─────────────────────────────────────────────────────────
+    // Loads a random preset from the user folder (excluding current)
+    bool loadRandomPreset();
+
+private:
+    // Write a preset from a raw parameter map
+    bool writeFactoryPreset(const juce::String& name,
+        const std::map<juce::String, float>& params);
+
+    void loadFavourites();
+    void saveFavourites() const;
+    juce::File getFavouritesFile() const;
+
+    juce::StringArray favourites;
+    std::mt19937 rng{ std::random_device{}() };
+
+
 
 private:
     juce::AudioProcessorValueTreeState& apvts;
