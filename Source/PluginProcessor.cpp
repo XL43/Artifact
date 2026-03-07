@@ -170,6 +170,10 @@ void ArtifactAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 {
     lossEngineL.prepare(sampleRate, samplesPerBlock);
     lossEngineR.prepare(sampleRate, samplesPerBlock);
+    noiseGenL.prepare(sampleRate, samplesPerBlock);
+    noiseGenR.prepare(sampleRate, samplesPerBlock);
+    filterSection.prepare(sampleRate, samplesPerBlock);
+    reverbEngine.prepare(sampleRate, samplesPerBlock);
     dryBuffer.setSize(2, samplesPerBlock, false, true, true);
 }
 
@@ -177,6 +181,10 @@ void ArtifactAudioProcessor::releaseResources()
 {
     lossEngineL.reset();
     lossEngineR.reset();
+    noiseGenL.reset();
+    noiseGenR.reset();
+    filterSection.reset();
+    reverbEngine.reset();
 }
 
 //==============================================================================
@@ -189,7 +197,7 @@ void ArtifactAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const int numSamples = buffer.getNumSamples();
     const int numChannels = buffer.getNumChannels();
 
-    // ── 1. Snapshot parameters ────────────────────────────────────────────────
+    // ── 1. Snapshot all parameters ────────────────────────────────────────────
     const float lossAmount = apvts.getRawParameterValue(ParamIDs::lossAmount)->load() / 100.0f;
     const float lossSpeed = apvts.getRawParameterValue(ParamIDs::lossSpeed)->load();
     const float lossGain = apvts.getRawParameterValue(ParamIDs::lossGain)->load();
@@ -198,6 +206,25 @@ void ArtifactAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const float preGain = apvts.getRawParameterValue(ParamIDs::preprocessGain)->load();
     const float postGain = apvts.getRawParameterValue(ParamIDs::postprocessGain)->load();
     const bool  bypassed = apvts.getRawParameterValue(ParamIDs::masterBypass)->load() > 0.5f;
+    const float noiseAmount = apvts.getRawParameterValue(ParamIDs::noiseAmount)->load() / 100.0f;
+    const float noiseBias = apvts.getRawParameterValue(ParamIDs::noiseBias)->load();
+    const bool  noiseEnabled = apvts.getRawParameterValue(ParamIDs::noiseEnabled)->load() > 0.5f;
+    const float verbAmount = apvts.getRawParameterValue(ParamIDs::verbAmount)->load() / 100.0f;
+    const float verbDecay = apvts.getRawParameterValue(ParamIDs::verbDecay)->load() / 100.0f;
+    const float lowCutHz = apvts.getRawParameterValue(ParamIDs::lowCutFreq)->load();
+    const float highCutHz = apvts.getRawParameterValue(ParamIDs::highCutFreq)->load();
+    const float autoGainAmt = apvts.getRawParameterValue(ParamIDs::autoGain)->load() / 100.0f;
+    const float gateThreshDB = apvts.getRawParameterValue(ParamIDs::gateThreshold)->load();
+
+    const auto noiseColor = static_cast<NoiseColor>  ((int)apvts.getRawParameterValue(ParamIDs::noiseColor)->load());
+    const auto filterMode = static_cast<FilterMode>  ((int)apvts.getRawParameterValue(ParamIDs::filterMode)->load());
+    const auto filterSlope = static_cast<FilterSlope> ((int)apvts.getRawParameterValue(ParamIDs::filterSlope)->load());
+    const auto lossMode = static_cast<LossMode>    ((int)apvts.getRawParameterValue(ParamIDs::lossMode)->load());
+    const auto codecMode = static_cast<CodecMode>   ((int)apvts.getRawParameterValue(ParamIDs::codecMode)->load());
+    const int  verbPosition = (int)apvts.getRawParameterValue(ParamIDs::verbPosition)->load();
+    const int  stereoMode = (int)apvts.getRawParameterValue(ParamIDs::stereoMode)->load();
+    const int  weighting = (int)apvts.getRawParameterValue(ParamIDs::weighting)->load();
+    const bool perceptual = (weighting == 0); // 0 = Perceptual, 1 = Flat
 
     // ── 2. Bypass ─────────────────────────────────────────────────────────────
     if (bypassed)
@@ -213,32 +240,153 @@ void ArtifactAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     for (int ch = 0; ch < numChannels; ++ch)
         buffer.applyGain(ch, 0, numSamples, preGainLinear);
 
-    // ── 5. Magnitude-scaled loss amount ───────────────────────────────────────
+    // ── 5. Magnitude scaling ──────────────────────────────────────────────────
     const float effectiveLoss = lossAmount * magnitude;
+    const float effectiveNoise = noiseAmount * magnitude;
+    const int   hopSize = hopSizeFromSpeed(lossSpeed);
 
-    // ── 6. Hop size from Loss Speed ───────────────────────────────────────────
-    const int hopSize = hopSizeFromSpeed(lossSpeed);
+    // ── 6. Filter (pre-Loss) ──────────────────────────────────────────────────
+    const bool filterActive = (lowCutHz > 21.0f || highCutHz < 19999.0f);
+    if (filterActive)
+        filterSection.processBlock(buffer, filterMode, lowCutHz, highCutHz, filterSlope);
 
-    // ── 7. Run Loss Engine ────────────────────────────────────────────────────
-    const auto lossMode = static_cast<LossMode>(
-        (int)apvts.getRawParameterValue(ParamIDs::lossMode)->load());
+    // ── 7. Verb Pre ───────────────────────────────────────────────────────────
+    if (verbPosition == 0 && verbAmount > 0.0001f)
+        reverbEngine.processBlock(buffer, verbAmount, verbDecay);
 
-    const auto codecMode = static_cast<CodecMode> (
-        (int)apvts.getRawParameterValue(ParamIDs::codecMode)->load());
+    // ── 8. Noise injection ────────────────────────────────────────────────────
+    if (noiseEnabled && effectiveNoise > 0.0001f)
+    {
+        if (numChannels >= 1)
+            noiseGenL.process(buffer.getWritePointer(0), numSamples,
+                effectiveNoise, noiseColor, noiseBias);
+        if (numChannels >= 2)
+            noiseGenR.process(buffer.getWritePointer(1), numSamples,
+                effectiveNoise, noiseColor, noiseBias);
+    }
 
-    if (numChannels >= 1)
+    // ── 9. Stereo Mode routing + Loss Engine ──────────────────────────────────
+    // Measure pre-Loss RMS for Auto Gain compensation
+    float preLossRMS = 0.0f;
+    if (autoGainAmt > 0.0001f)
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            auto* data = buffer.getReadPointer(ch);
+            for (int i = 0; i < numSamples; ++i)
+                preLossRMS += data[i] * data[i];
+        }
+        preLossRMS = std::sqrt(preLossRMS / (float)(numSamples * numChannels));
+    }
+
+    if (stereoMode == 2) // Mono — sum L+R to centre
+    {
+        // Average L and R into both channels
+        if (numChannels >= 2)
+        {
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float mono = (buffer.getSample(0, i)
+                    + buffer.getSample(1, i)) * 0.5f;
+                buffer.setSample(0, i, mono);
+                buffer.setSample(1, i, mono);
+            }
+        }
+        // Process both channels (identical content) through Loss
+        if (numChannels >= 1)
+            lossEngineL.processBlock(buffer.getWritePointer(0), numSamples,
+                effectiveLoss, hopSize, lossMode, codecMode, perceptual);
+        if (numChannels >= 2)
+            lossEngineR.processBlock(buffer.getWritePointer(1), numSamples,
+                effectiveLoss, hopSize, lossMode, codecMode, perceptual);
+    }
+    else if (stereoMode == 1 && numChannels >= 2) // Joint Stereo — M/S processing
+    {
+        // Encode to Mid/Side
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float L = buffer.getSample(0, i);
+            const float R = buffer.getSample(1, i);
+            buffer.setSample(0, i, (L + R) * 0.5f);  // Mid
+            buffer.setSample(1, i, (L - R) * 0.5f);  // Side
+        }
+
+        // Apply Loss only to Mid channel — Side is preserved
+        // This mimics real Joint Stereo codec behaviour where the
+        // stereo difference signal is kept more intact than the sum
         lossEngineL.processBlock(buffer.getWritePointer(0), numSamples,
-            effectiveLoss, hopSize, lossMode, codecMode);
-    if (numChannels >= 2)
-        lossEngineR.processBlock(buffer.getWritePointer(1), numSamples,
-            effectiveLoss, hopSize, lossMode, codecMode);
+            effectiveLoss, hopSize, lossMode, codecMode, perceptual);
 
-    // ── 8. Loss Gain ──────────────────────────────────────────────────────────
+        // Decode back to L/R
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float mid = buffer.getSample(0, i);
+            const float side = buffer.getSample(1, i);
+            buffer.setSample(0, i, mid + side);  // L
+            buffer.setSample(1, i, mid - side);  // R
+        }
+    }
+    else // Stereo — independent L and R (default)
+    {
+        if (numChannels >= 1)
+            lossEngineL.processBlock(buffer.getWritePointer(0), numSamples,
+                effectiveLoss, hopSize, lossMode, codecMode, perceptual);
+        if (numChannels >= 2)
+            lossEngineR.processBlock(buffer.getWritePointer(1), numSamples,
+                effectiveLoss, hopSize, lossMode, codecMode, perceptual);
+    }
+
+    // ── 10. Auto Gain compensation ────────────────────────────────────────────
+    // Measures post-Loss RMS and applies compensating gain to match pre-Loss level.
+    // Blended by autoGainAmt so 0% = no compensation, 100% = full compensation.
+    if (autoGainAmt > 0.0001f && preLossRMS > 0.0001f)
+    {
+        float postLossRMS = 0.0f;
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            auto* data = buffer.getReadPointer(ch);
+            for (int i = 0; i < numSamples; ++i)
+                postLossRMS += data[i] * data[i];
+        }
+        postLossRMS = std::sqrt(postLossRMS / (float)(numSamples * numChannels));
+
+        if (postLossRMS > 0.0001f)
+        {
+            // Compensating gain — clamped to max +18dB to prevent blowups
+            const float compensationGain = juce::jlimit(0.0f, 8.0f,
+                preLossRMS / postLossRMS);
+            // Blend: 0% autoGain = gain of 1.0, 100% = full compensation
+            const float blendedGain = 1.0f + (compensationGain - 1.0f) * autoGainAmt;
+            for (int ch = 0; ch < numChannels; ++ch)
+                buffer.applyGain(ch, 0, numSamples, blendedGain);
+        }
+    }
+
+    // ── 11. Verb Post ─────────────────────────────────────────────────────────
+    if (verbPosition == 1 && verbAmount > 0.0001f)
+        reverbEngine.processBlock(buffer, verbAmount, verbDecay);
+
+    // ── 12. Gate ──────────────────────────────────────────────────────────────
+    // Silence output below gateThreshold — removes very quiet artefact noise.
+    // gateThreshDB default is -96dB which is effectively off.
+    if (gateThreshDB > -95.9f)
+    {
+        const float gateLinear = juce::Decibels::decibelsToGain(gateThreshDB);
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            auto* data = buffer.getWritePointer(ch);
+            for (int i = 0; i < numSamples; ++i)
+                if (std::abs(data[i]) < gateLinear)
+                    data[i] = 0.0f;
+        }
+    }
+
+    // ── 13. Loss Gain ─────────────────────────────────────────────────────────
     const float lossGainLinear = juce::Decibels::decibelsToGain(lossGain);
     for (int ch = 0; ch < numChannels; ++ch)
         buffer.applyGain(ch, 0, numSamples, lossGainLinear);
 
-    // ── 9. Master Mix blend ───────────────────────────────────────────────────
+    // ── 14. Master Mix blend ──────────────────────────────────────────────────
     for (int ch = 0; ch < numChannels; ++ch)
     {
         auto* wet = buffer.getWritePointer(ch);
@@ -247,7 +395,7 @@ void ArtifactAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             wet[i] = wet[i] * masterMix + dry[i] * (1.0f - masterMix);
     }
 
-    // ── 10. Postprocess gain ──────────────────────────────────────────────────
+    // ── 15. Postprocess gain ──────────────────────────────────────────────────
     const float postGainLinear = juce::Decibels::decibelsToGain(postGain);
     for (int ch = 0; ch < numChannels; ++ch)
         buffer.applyGain(ch, 0, numSamples, postGainLinear);

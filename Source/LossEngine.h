@@ -37,7 +37,8 @@ public:
 
     void processBlock(float* channelData, int numSamples,
         float lossAmount, int hopSize,
-        LossMode mode, CodecMode codec);
+        LossMode mode, CodecMode codec,
+        bool perceptualWeighting);  // ← add this
 
 private:
     void processFrame(float lossAmount, int hopSize,
@@ -78,4 +79,12 @@ private:
 
     std::mt19937 rng{ 12345 };
     bool isPrepared = false;
+
+    // ── Perceptual weighting (pre/de-emphasis) ────────────────────────────────
+    // Pre-emphasis boosts highs before FFT so they are weighted more heavily
+    // during bin dropping. De-emphasis is the exact inverse applied after IFFT.
+    // Together they produce codec-style psychoacoustic frequency shaping.
+    float preEmphState = 0.0f;
+    float deEmphState = 0.0f;
+    bool  usePerceptual = false;
 };

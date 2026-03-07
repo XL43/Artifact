@@ -6,6 +6,16 @@
               pluginCode="ARTF">
   <MAINGROUP id="TXqQi9" name="Artifact">
     <GROUP id="{86B9ACA4-4185-CE1B-7FE6-60B28FD7D494}" name="Source">
+      <FILE id="LynVTT" name="ReverbEngine.cpp" compile="1" resource="0"
+            file="Source/ReverbEngine.cpp"/>
+      <FILE id="bkkPXP" name="ReverbEngine.h" compile="0" resource="0" file="Source/ReverbEngine.h"/>
+      <FILE id="Av2qDZ" name="FilterSection.cpp" compile="1" resource="0"
+            file="Source/FilterSection.cpp"/>
+      <FILE id="VASGeu" name="FilterSection.h" compile="0" resource="0" file="Source/FilterSection.h"/>
+      <FILE id="vy3FTR" name="NoiseGenerator.cpp" compile="1" resource="0"
+            file="Source/NoiseGenerator.cpp"/>
+      <FILE id="QnzhbT" name="NoiseGenerator.h" compile="0" resource="0"
+            file="Source/NoiseGenerator.h"/>
       <FILE id="x5NHmP" name="LossEngine.cpp" compile="1" resource="0" file="Source/LossEngine.cpp"/>
       <FILE id="ptPqrb" name="LossEngine.h" compile="0" resource="0" file="Source/LossEngine.h"/>
       <FILE id="MH3slj" name="PluginProcessor.cpp" compile="1" resource="0"

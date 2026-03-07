@@ -1,6 +1,9 @@
 #pragma once
 #include <JuceHeader.h>
 #include "LossEngine.h"
+#include "NoiseGenerator.h"
+#include "FilterSection.h"
+#include "ReverbEngine.h"
 
 class ArtifactAudioProcessor : public juce::AudioProcessor
 {
@@ -43,6 +46,16 @@ private:
     // ── Phase 2: Loss Engine ──────────────────────────────────────────────────
     LossEngine lossEngineL;
     LossEngine lossEngineR;
+
+    // ── Phase 5: Noise Generator ──────────────────────────────────────────────
+    NoiseGenerator noiseGenL;
+    NoiseGenerator noiseGenR;
+
+    // ── Phase 6: Filter Section ───────────────────────────────────────────────
+    FilterSection filterSection;
+
+    // ── Phase 7: Reverb Engine ────────────────────────────────────────────────
+    ReverbEngine reverbEngine;
 
     juce::AudioBuffer<float> dryBuffer;
 

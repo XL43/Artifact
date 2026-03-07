@@ -109,24 +109,60 @@ void LossEngine::reset()
     disorderReadIdx = 0;
     disorderFill = 0;
     lastFrameDropped = false;
+
+    preEmphState = 0.0f;
+    deEmphState = 0.0f;
 }
 
 //==============================================================================
 void LossEngine::processBlock(float* data, int numSamples,
     float lossAmount, int hopSize,
-    LossMode mode, CodecMode codec)
+    LossMode mode, CodecMode codec,
+    bool perceptualWeighting)
 {
     jassert(isPrepared);
     jassert(hopSize > 0 && hopSize <= fftSize);
 
+    // Pre-emphasis coefficient — simple one-pole high shelf
+    // Boosts frequencies above ~3kHz before entering the FFT.
+    // De-emphasis uses the same coefficient in reverse to restore balance.
+    // At 44.1kHz: coeff 0.97 gives shelf transition around 3kHz.
+    const float emphCoeff = 0.97f;
+
     for (int i = 0; i < numSamples; ++i)
     {
-        inputRing[inputWritePos] = data[i];
+        float sample = data[i];
+
+        // ── Pre-emphasis (perceptual mode only) ───────────────────────────────
+        // High-frequency emphasis: y[n] = x[n] - coeff * x[n-1]
+        // This makes high frequencies louder entering the Loss engine,
+        // so they are proportionally less likely to be dropped.
+        if (perceptualWeighting)
+        {
+            const float emphasised = sample - emphCoeff * preEmphState;
+            preEmphState = sample;
+            sample = emphasised;
+        }
+
+        // Feed into ring buffer
+        inputRing[inputWritePos] = sample;
         inputWritePos = (inputWritePos + 1) % fftSize;
 
-        data[i] = outputAccum[outputReadPos];
+        // Read output
+        float output = outputAccum[outputReadPos];
         outputAccum[outputReadPos] = 0.0f;
         outputReadPos = (outputReadPos + 1) % accumSize;
+
+        // ── De-emphasis (perceptual mode only) ────────────────────────────────
+        // Exact inverse of pre-emphasis: y[n] = x[n] + coeff * y[n-1]
+        // Restores the frequency balance after Loss processing.
+        if (perceptualWeighting)
+        {
+            deEmphState = output + emphCoeff * deEmphState;
+            output = deEmphState;
+        }
+
+        data[i] = output;
 
         if (++hopCounter >= hopSize)
         {
