@@ -1,8 +1,9 @@
 #include "LossEngine.h"
 
 //==============================================================================
-void LossEngine::prepare(double /*sampleRate*/, int /*maxBlockSize*/)
+void LossEngine::prepare(double sampleRate, int /*maxBlockSize*/)
 {
+    currentSampleRate = sampleRate;
     fft = std::make_unique<juce::dsp::FFT>(fftOrder);
 
     hannWindow.resize(fftSize);
@@ -15,23 +16,83 @@ void LossEngine::prepare(double /*sampleRate*/, int /*maxBlockSize*/)
     fftBuffer.assign(fftSize * 2, 0.0f);
     previousFrame.assign(fftSize, 0.0f);
 
-    // Disorder buffer — pre-allocate all frames
-    disorderFrameBuffer.assign(disorderBufferFrames, std::vector<float>(fftSize, 0.0f));
-    disorderWriteIdx = 0;
-    disorderReadIdx = 0;
-    disorderFill = 0;
+    disorderFrameBuffer.assign(disorderBufferFrames,
+        std::vector<float>(fftSize, 0.0f));
 
-    inputWritePos = 0;
-    outputReadPos = 0;
-    hopCounter = 0;
-    lastFrameDropped = false;
+    buildCodecWeights();
+
+    reset();
     isPrepared = true;
+}
+
+//==============================================================================
+void LossEngine::buildCodecWeights()
+{
+    const int numBins = fftSize / 2 + 1;
+    voiceWeights.resize(numBins, 1.0f);
+    broadcastWeights.resize(numBins, 1.0f);
+
+    for (int b = 0; b < numBins; ++b)
+    {
+        const float binHz = (float)b * (float)currentSampleRate / (float)fftSize;
+
+        // Voice: maps lossAmount to a normalised "how destroyed is this bin"
+        // threshold. Bins with threshold < lossAmount are ALWAYS zeroed.
+        // Sub-bass and air threshold = 0.0 → gone the instant loss > 0%
+        // Speech band threshold = 0.8 → only gone when loss > 80%
+        if (binHz < 80.0f)                         voiceWeights[b] = 0.0f;
+        else if (binHz < 300.0f)                        voiceWeights[b] = 0.15f;
+        else if (binHz >= 300.0f && binHz <= 3400.0f)   voiceWeights[b] = 0.85f;
+        else if (binHz <= 6000.0f)                      voiceWeights[b] = 0.25f;
+        else                                            voiceWeights[b] = 0.05f;
+
+        // Broadcast: sub and air gone immediately, broadcast band preserved
+        if (binHz < 80.0f)                         broadcastWeights[b] = 0.0f;
+        else if (binHz < 150.0f)                        broadcastWeights[b] = 0.1f;
+        else if (binHz >= 150.0f && binHz <= 8000.0f)   broadcastWeights[b] = 0.9f;
+        else if (binHz <= 12000.0f)                     broadcastWeights[b] = 0.15f;
+        else                                            broadcastWeights[b] = 0.02f;
+    }
+}
+
+//==============================================================================
+float LossEngine::binDropProb(int binIndex, float lossAmount, CodecMode codec) const
+{
+    // Music mode: pure random, flat across spectrum
+    if (codec == CodecMode::Music)
+        return lossAmount;
+
+    // Voice / Broadcast: threshold-based deterministic zones.
+    // The weight value IS the lossAmount threshold above which this bin
+    // is ALWAYS zeroed. Below the threshold it uses a reduced random prob.
+    //
+    // weight = 0.0  → always zero (even at 1% loss)
+    // weight = 0.5  → always zero when loss > 50%, random below that
+    // weight = 0.9  → only zeroed randomly until loss hits 90%, then always gone
+    //
+    const float threshold = (codec == CodecMode::Voice)
+        ? voiceWeights[binIndex]
+        : broadcastWeights[binIndex];
+
+    if (lossAmount >= threshold)
+        return 1.0f;   // deterministically drop this bin
+
+    // Below threshold: scale random probability to the remaining headroom
+    // so the transition to always-drop is smooth rather than a hard click
+    const float headroom = (threshold > 0.0f) ? threshold : 1.0f;
+    return juce::jlimit(0.0f, 1.0f, (lossAmount / headroom) * 0.6f);
 }
 
 //==============================================================================
 void LossEngine::reset()
 {
-    if (!isPrepared) return;
+    if (!isPrepared)
+    {
+        inputWritePos = outputReadPos = hopCounter = 0;
+        disorderWriteIdx = disorderReadIdx = disorderFill = 0;
+        lastFrameDropped = false;
+        return;
+    }
 
     std::fill(inputRing.begin(), inputRing.end(), 0.0f);
     std::fill(outputAccum.begin(), outputAccum.end(), 0.0f);
@@ -52,35 +113,34 @@ void LossEngine::reset()
 
 //==============================================================================
 void LossEngine::processBlock(float* data, int numSamples,
-    float lossAmount, int hopSize, LossMode mode)
+    float lossAmount, int hopSize,
+    LossMode mode, CodecMode codec)
 {
     jassert(isPrepared);
     jassert(hopSize > 0 && hopSize <= fftSize);
 
     for (int i = 0; i < numSamples; ++i)
     {
-        // Feed input into ring buffer
         inputRing[inputWritePos] = data[i];
         inputWritePos = (inputWritePos + 1) % fftSize;
 
-        // Read output sample and clear that slot
         data[i] = outputAccum[outputReadPos];
         outputAccum[outputReadPos] = 0.0f;
         outputReadPos = (outputReadPos + 1) % accumSize;
 
-        // Process a new frame every hopSize samples
         if (++hopCounter >= hopSize)
         {
             hopCounter = 0;
-            processFrame(lossAmount, hopSize, mode);
+            processFrame(lossAmount, hopSize, mode, codec);
         }
     }
 }
 
 //==============================================================================
-void LossEngine::processFrame(float lossAmount, int hopSize, LossMode mode)
+void LossEngine::processFrame(float lossAmount, int hopSize,
+    LossMode mode, CodecMode codec)
 {
-    // ── Step 1: Window and copy ring buffer into fftBuffer ────────────────────
+    // ── 1. Window input ───────────────────────────────────────────────────────
     for (int k = 0; k < fftSize; ++k)
     {
         const int idx = (inputWritePos + k) % fftSize;
@@ -88,26 +148,15 @@ void LossEngine::processFrame(float lossAmount, int hopSize, LossMode mode)
         fftBuffer[k + fftSize] = 0.0f;
     }
 
-    // ── Step 2: Forward FFT ───────────────────────────────────────────────────
+    // ── 2. Forward FFT ────────────────────────────────────────────────────────
     fft->performRealOnlyForwardTransform(fftBuffer.data(), true);
 
-    // ── Step 3: Per-mode spectral processing ──────────────────────────────────
     const int numBins = fftSize / 2 + 1;
     std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
     std::uniform_real_distribution<float> distPi(-juce::MathConstants<float>::pi,
         juce::MathConstants<float>::pi);
 
-    // Helper: which bins would Standard mode zero?
-    // We compute this mask for modes that need to know (Inverse, combos).
-    auto buildDropMask = [&](std::vector<bool>& mask)
-        {
-            mask.resize(numBins);
-            for (int b = 1; b < numBins - 1; ++b)
-                mask[b] = (dist01(rng) < lossAmount);
-            mask[0] = false; // always keep DC
-            mask[numBins - 1] = false; // always keep Nyquist
-        };
-
+    // ── 3. Mode-specific spectral processing ──────────────────────────────────
     switch (mode)
     {
         //----------------------------------------------------------------------
@@ -115,7 +164,7 @@ void LossEngine::processFrame(float lossAmount, int hopSize, LossMode mode)
     {
         for (int b = 1; b < numBins - 1; ++b)
         {
-            if (dist01(rng) < lossAmount)
+            if (dist01(rng) < binDropProb(b, lossAmount, codec))
             {
                 fftBuffer[b * 2] = 0.0f;
                 fftBuffer[b * 2 + 1] = 0.0f;
@@ -127,11 +176,10 @@ void LossEngine::processFrame(float lossAmount, int hopSize, LossMode mode)
     //----------------------------------------------------------------------
     case LossMode::Inverse:
     {
-        // Keep ONLY the bins that Standard would have dropped.
-        // Bins that Standard keeps → we zero them.
         for (int b = 1; b < numBins - 1; ++b)
         {
-            if (dist01(rng) >= lossAmount) // Standard would have kept this bin
+            // Keep only what Standard would have dropped
+            if (dist01(rng) >= binDropProb(b, lossAmount, codec))
             {
                 fftBuffer[b * 2] = 0.0f;
                 fftBuffer[b * 2 + 1] = 0.0f;
@@ -143,18 +191,14 @@ void LossEngine::processFrame(float lossAmount, int hopSize, LossMode mode)
     //----------------------------------------------------------------------
     case LossMode::PhaseJitter:
     {
-        // Rotate each bin's phase by a random amount scaled by lossAmount.
-        // This produces metallic ringing and pitch instability without
-        // removing any energy — all bins stay present but are phase-corrupted.
+        // Phase jitter is spectrally flat — codec mode has no effect here
         for (int b = 1; b < numBins - 1; ++b)
         {
-            const float jitterAmount = lossAmount * distPi(rng);
+            const float jitter = lossAmount * distPi(rng);
             const float re = fftBuffer[b * 2];
             const float im = fftBuffer[b * 2 + 1];
-            const float cosJ = std::cos(jitterAmount);
-            const float sinJ = std::sin(jitterAmount);
-            fftBuffer[b * 2] = re * cosJ - im * sinJ;
-            fftBuffer[b * 2 + 1] = re * sinJ + im * cosJ;
+            fftBuffer[b * 2] = re * std::cos(jitter) - im * std::sin(jitter);
+            fftBuffer[b * 2 + 1] = re * std::sin(jitter) + im * std::cos(jitter);
         }
         break;
     }
@@ -162,11 +206,8 @@ void LossEngine::processFrame(float lossAmount, int hopSize, LossMode mode)
     //----------------------------------------------------------------------
     case LossMode::PacketLoss:
     {
-        // Drop the entire frame with probability = lossAmount.
-        // Output silence for this frame if dropped.
         if (dist01(rng) < lossAmount)
         {
-            // Zero all bins — entire frame is lost
             std::fill(fftBuffer.begin(), fftBuffer.begin() + fftSize * 2, 0.0f);
             lastFrameDropped = true;
         }
@@ -180,38 +221,21 @@ void LossEngine::processFrame(float lossAmount, int hopSize, LossMode mode)
     //----------------------------------------------------------------------
     case LossMode::PacketRepeat:
     {
-        // Drop the entire frame with probability = lossAmount.
-        // On a drop, repeat the previous successfully decoded frame.
-        if (dist01(rng) < lossAmount)
-        {
-            // Replace fftBuffer time-domain data with the previous frame.
-            // We need to re-forward-FFT the previous frame, or more simply:
-            // skip the IFFT write and OLA the previous frame directly.
-            // Easiest: store and replay the previous post-IFFT frame.
-            // We flag this and handle it after the IFFT below.
-            lastFrameDropped = true;
-        }
-        else
-        {
-            lastFrameDropped = false;
-        }
+        lastFrameDropped = (dist01(rng) < lossAmount);
         break;
     }
 
     //----------------------------------------------------------------------
     case LossMode::StdPlusPacketLoss:
     {
-        // First apply Standard bin zeroing...
         for (int b = 1; b < numBins - 1; ++b)
         {
-            if (dist01(rng) < lossAmount)
+            if (dist01(rng) < binDropProb(b, lossAmount, codec))
             {
                 fftBuffer[b * 2] = 0.0f;
                 fftBuffer[b * 2 + 1] = 0.0f;
             }
         }
-        // ...then also drop the whole frame with probability = lossAmount * 0.5
-        // (halved so the combo doesn't become completely silent at mid amounts)
         if (dist01(rng) < lossAmount * 0.5f)
             std::fill(fftBuffer.begin(), fftBuffer.begin() + fftSize * 2, 0.0f);
         break;
@@ -220,41 +244,53 @@ void LossEngine::processFrame(float lossAmount, int hopSize, LossMode mode)
     //----------------------------------------------------------------------
     case LossMode::StdPlusPacketRepeat:
     {
-        // Standard bin zeroing first
         for (int b = 1; b < numBins - 1; ++b)
         {
-            if (dist01(rng) < lossAmount)
+            if (dist01(rng) < binDropProb(b, lossAmount, codec))
             {
                 fftBuffer[b * 2] = 0.0f;
                 fftBuffer[b * 2 + 1] = 0.0f;
             }
         }
-        // Then potentially repeat the frame
-        if (dist01(rng) < lossAmount * 0.5f)
-            lastFrameDropped = true;
-        else
-            lastFrameDropped = false;
+        lastFrameDropped = (dist01(rng) < lossAmount * 0.5f);
         break;
     }
 
     //----------------------------------------------------------------------
     case LossMode::PacketDisorder:
     {
-        // No spectral processing here — disorder happens at the frame
-        // output stage after the IFFT (see below)
+        // No spectral processing — disorder happens at OLA stage below
+        break;
+    }
+
+    //----------------------------------------------------------------------
+    case LossMode::DisorderPlusStandard:
+    {
+        // Standard bin zeroing first, then disorder at OLA stage
+        for (int b = 1; b < numBins - 1; ++b)
+        {
+            if (dist01(rng) < binDropProb(b, lossAmount, codec))
+            {
+                fftBuffer[b * 2] = 0.0f;
+                fftBuffer[b * 2 + 1] = 0.0f;
+            }
+        }
         break;
     }
     }
 
-    // ── Step 4: Inverse FFT ───────────────────────────────────────────────────
+    // ── 4. Inverse FFT ────────────────────────────────────────────────────────
     fft->performRealOnlyInverseTransform(fftBuffer.data());
 
-    // ── Step 5: Overlap-add ───────────────────────────────────────────────────
     const float norm = 2.0f * (float)hopSize / (float)fftSize;
 
-    if (mode == LossMode::PacketDisorder)
+    // ── 5. Overlap-add (mode-specific output routing) ─────────────────────────
+    const bool isDisorder = (mode == LossMode::PacketDisorder ||
+        mode == LossMode::DisorderPlusStandard);
+
+    if (isDisorder)
     {
-        // Store this decoded frame into the disorder buffer
+        // Store decoded frame in disorder buffer
         auto& writeSlot = disorderFrameBuffer[disorderWriteIdx];
         for (int k = 0; k < fftSize; ++k)
             writeSlot[k] = fftBuffer[k] * norm;
@@ -262,15 +298,11 @@ void LossEngine::processFrame(float lossAmount, int hopSize, LossMode mode)
         disorderWriteIdx = (disorderWriteIdx + 1) % disorderBufferFrames;
         if (disorderFill < disorderBufferFrames) ++disorderFill;
 
-        // Pick a random frame from the buffer to output
         if (disorderFill > 0)
         {
-            // At lossAmount = 0: always read in order (no disorder)
-            // At lossAmount = 1: fully random read index
             int readIdx;
             if (dist01(rng) < lossAmount)
             {
-                // Random frame from the filled portion
                 std::uniform_int_distribution<int> frameDist(0, disorderFill - 1);
                 readIdx = (disorderWriteIdx - 1 - frameDist(rng)
                     + disorderBufferFrames) % disorderBufferFrames;
@@ -292,7 +324,7 @@ void LossEngine::processFrame(float lossAmount, int hopSize, LossMode mode)
     else if ((mode == LossMode::PacketRepeat || mode == LossMode::StdPlusPacketRepeat)
         && lastFrameDropped)
     {
-        // Repeat the previous frame instead of the current one
+        // Repeat previous frame
         for (int k = 0; k < fftSize; ++k)
         {
             const int idx = (outputReadPos + k) % accumSize;
@@ -301,14 +333,13 @@ void LossEngine::processFrame(float lossAmount, int hopSize, LossMode mode)
     }
     else
     {
-        // Normal overlap-add
+        // Normal OLA
         for (int k = 0; k < fftSize; ++k)
         {
             const int idx = (outputReadPos + k) % accumSize;
             outputAccum[idx] += fftBuffer[k] * norm;
         }
 
-        // Save this frame as the previous frame for Packet Repeat
         for (int k = 0; k < fftSize; ++k)
             previousFrame[k] = fftBuffer[k];
     }

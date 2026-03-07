@@ -49,7 +49,7 @@ ArtifactAudioProcessor::createParameterLayout()
         juce::StringArray{ "Standard", "Inverse", "Phase Jitter",
                             "Packet Repeat", "Packet Loss",
                             "Std + Packet Loss", "Std + Packet Repeat",
-                            "Packet Disorder" },
+                            "Packet Disorder", "Disorder + Standard" },  // ← added
         0));
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -223,12 +223,15 @@ void ArtifactAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const auto lossMode = static_cast<LossMode>(
         (int)apvts.getRawParameterValue(ParamIDs::lossMode)->load());
 
+    const auto codecMode = static_cast<CodecMode> (
+        (int)apvts.getRawParameterValue(ParamIDs::codecMode)->load());
+
     if (numChannels >= 1)
         lossEngineL.processBlock(buffer.getWritePointer(0), numSamples,
-            effectiveLoss, hopSize, lossMode);
+            effectiveLoss, hopSize, lossMode, codecMode);
     if (numChannels >= 2)
         lossEngineR.processBlock(buffer.getWritePointer(1), numSamples,
-            effectiveLoss, hopSize, lossMode);
+            effectiveLoss, hopSize, lossMode, codecMode);
 
     // ── 8. Loss Gain ──────────────────────────────────────────────────────────
     const float lossGainLinear = juce::Decibels::decibelsToGain(lossGain);

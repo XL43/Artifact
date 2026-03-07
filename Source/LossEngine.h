@@ -3,7 +3,6 @@
 #include <random>
 
 //==============================================================================
-// Must match the AudioParameterChoice order in PluginProcessor.cpp exactly
 enum class LossMode
 {
     Standard = 0,
@@ -13,7 +12,15 @@ enum class LossMode
     PacketLoss,
     StdPlusPacketLoss,
     StdPlusPacketRepeat,
-    PacketDisorder
+    PacketDisorder,
+    DisorderPlusStandard   // ← new combo mode
+};
+
+enum class CodecMode
+{
+    Music = 0,   // Uniform bin selection across full spectrum
+    Voice,       // Mid-range (200–3000 Hz) bins drop first — telephone character
+    Broadcast    // High (>8kHz) and low (<200Hz) bins drop first — radio bandwidth
 };
 
 //==============================================================================
@@ -22,25 +29,24 @@ class LossEngine
 public:
     static constexpr int fftOrder = 11;
     static constexpr int fftSize = 1 << fftOrder;  // 2048
-    static constexpr int accumSize = fftSize * 2;     // 4096
-
-    // ── Disorder buffer ───────────────────────────────────────────────────────
-    // Stores up to this many reconstructed frames before shuffling playback order.
+    static constexpr int accumSize = fftSize * 2;    // 4096
     static constexpr int disorderBufferFrames = 8;
 
     void prepare(double sampleRate, int maxBlockSize);
     void reset();
 
-    // lossAmount : 0.0 → 1.0
-    // hopSize    : samples between frames (Loss Speed)
-    // mode       : which algorithm to apply
     void processBlock(float* channelData, int numSamples,
-        float lossAmount, int hopSize, LossMode mode);
+        float lossAmount, int hopSize,
+        LossMode mode, CodecMode codec);
 
 private:
-    void processFrame(float lossAmount, int hopSize, LossMode mode);
+    void processFrame(float lossAmount, int hopSize,
+        LossMode mode, CodecMode codec);
 
-    // ── Core FFT machinery ────────────────────────────────────────────────────
+    // Returns the drop probability for a given bin index, respecting codec mode
+    float binDropProb(int binIndex, float lossAmount, CodecMode codec) const;
+
+    // ── Core FFT ──────────────────────────────────────────────────────────────
     std::unique_ptr<juce::dsp::FFT> fft;
     std::vector<float> hannWindow;
     std::vector<float> inputRing;
@@ -51,20 +57,25 @@ private:
     int outputReadPos = 0;
     int hopCounter = 0;
 
-    // ── Packet Repeat / Packet Loss ───────────────────────────────────────────
-    // Stores the last successfully output frame so we can repeat it on drops
+    // ── Packet Repeat ─────────────────────────────────────────────────────────
     std::vector<float> previousFrame;
     bool lastFrameDropped = false;
 
     // ── Packet Disorder ───────────────────────────────────────────────────────
-    // Circular buffer of decoded frames — played back in shuffled order
     std::vector<std::vector<float>> disorderFrameBuffer;
     int disorderWriteIdx = 0;
     int disorderReadIdx = 0;
-    int disorderFill = 0;  // how many frames are currently buffered
+    int disorderFill = 0;
 
-    // ── RNG ───────────────────────────────────────────────────────────────────
+    // ── Codec Mode weight tables ───────────────────────────────────────────────
+    // Pre-computed per-bin multipliers applied to lossAmount before the drop test.
+    // Avoids any per-sample branching on codec mode inside the hot loop.
+    std::vector<float> voiceWeights;      // high weight = drops sooner
+    std::vector<float> broadcastWeights;
+
+    double currentSampleRate = 44100.0;
+    void buildCodecWeights();             // called inside prepare()
+
     std::mt19937 rng{ 12345 };
-
     bool isPrepared = false;
 };
