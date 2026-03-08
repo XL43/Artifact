@@ -7,6 +7,9 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
 {
     setLookAndFeel(&laf);
     setSize(860, 610);
+    setResizable(true, false);
+    setResizeLimits(minW, minH, maxW, maxH);
+    addAndMakeVisible(resizeHandle);
 
     auto& apvts = audioProcessor.apvts;
 
@@ -17,12 +20,19 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
         juce::Colour(ArtifactLookAndFeel::colAccent));
     addAndMakeVisible(pluginNameLabel);
 
-    presetNameLabel.setText(audioProcessor.presetManager.getCurrentPresetName(),
-        juce::dontSendNotification);
-    presetNameLabel.setJustificationType(juce::Justification::centred);
-    presetNameLabel.setFont(juce::Font(juce::FontOptions{}.withHeight(12.5f)));
-    addAndMakeVisible(presetNameLabel);
+    presetNameBtn.setButtonText(audioProcessor.presetManager.getCurrentPresetName());
+    presetNameBtn.setTooltip("Click to browse presets");
+    presetNameBtn.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    presetNameBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+    presetNameBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
+    presetNameBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(ArtifactLookAndFeel::colText));
+    presetNameBtn.setColour(juce::TextButton::textColourOnId, juce::Colour(ArtifactLookAndFeel::colText));
+    presetNameBtn.onClick = [this] { showPresetMenu(); };
+    addAndMakeVisible(presetNameBtn);
 
+    // Make label clickable — shows preset browser popup
+
+    presetPrevBtn.setTooltip("Load previous preset");
     presetPrevBtn.onClick = [this]
         {
             audioProcessor.presetManager.loadPreviousPreset();
@@ -30,6 +40,7 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
         };
     addAndMakeVisible(presetPrevBtn);
 
+    presetNextBtn.setTooltip("Load next preset");
     presetNextBtn.onClick = [this]
         {
             audioProcessor.presetManager.loadNextPreset();
@@ -37,6 +48,7 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
         };
     addAndMakeVisible(presetNextBtn);
 
+    presetSaveBtn.setTooltip("Save current settings as a new preset");
     presetSaveBtn.onClick = [this]
         {
             auto* dialog = new juce::AlertWindow("Save Preset",
@@ -62,14 +74,14 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
         };
     addAndMakeVisible(presetSaveBtn);
 
+    presetInitBtn.setTooltip("Reset all parameters to default values");
     presetInitBtn.onClick = [this]
         {
             audioProcessor.initializeParameters();
-            presetNameLabel.setText("Default", juce::dontSendNotification);
         };
     addAndMakeVisible(presetInitBtn);
 
-    // ── Star (favourite) ──────────────────────────────────────────────────────
+    starBtn.setTooltip("Toggle favourite for current preset");
     starBtn.setClickingTogglesState(true);
     starBtn.setToggleState(
         audioProcessor.presetManager.isFavourite(
@@ -86,19 +98,15 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
         };
     addAndMakeVisible(starBtn);
 
-    // ── Shuffle (random preset) ───────────────────────────────────────────────
+    shuffleBtn.setTooltip("Load a random preset");
     shuffleBtn.onClick = [this]
         {
             audioProcessor.presetManager.loadRandomPreset();
             updatePresetDisplay();
-            starBtn.setToggleState(
-                audioProcessor.presetManager.isFavourite(
-                    audioProcessor.presetManager.getCurrentPresetName()),
-                juce::dontSendNotification);
         };
     addAndMakeVisible(shuffleBtn);
 
-    // ── Dice (randomize all parameters) ──────────────────────────────────────
+    diceBtn.setTooltip("Randomize all parameters");
     diceBtn.onClick = [this] { audioProcessor.randomizeParameters(); };
     addAndMakeVisible(diceBtn);
 
@@ -107,14 +115,18 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
                                  "Packet Repeat", "Packet Loss",
                                  "Std + Packet Loss", "Std + Packet Repeat",
                                  "Packet Disorder", "Disorder + Standard" }, 1);
-    setupCombo(lossModeCombo, lossModeLabel, "MODE");
+    setupCombo(lossModeCombo, lossModeLabel, "MODE",
+        "Loss algorithm - sets how the spectral degradation is applied");
 
-    codecModeCombo.addItemList({ "Music", "Voice", "Broadcast" }, 1);
-    setupCombo(codecModeCombo, codecModeLabel, "CODEC");
+    setupCombo(codecModeCombo, codecModeLabel, "CODEC",
+        "Codec mode - shapes which frequency regions degrade first");
 
-    setupRotary(lossAmountSlider, lossAmountLabel, "AMOUNT");
-    setupRotary(lossSpeedSlider, lossSpeedLabel, "SPEED");
-    setupRotary(lossGainSlider, lossGainLabel, "GAIN");
+    setupRotary(lossAmountSlider, lossAmountLabel, "AMOUNT",
+        "Loss Amount - how many spectral bins are affected per frame");
+    setupRotary(lossSpeedSlider, lossSpeedLabel, "SPEED",
+        "Loss Speed - controls FFT hop size, affecting smear character");
+    setupRotary(lossGainSlider, lossGainLabel, "GAIN",
+        "Loss Gain - output gain applied after the Loss engine");
 
     lossModeAttach = std::make_unique<CA>(apvts, "lossMode", lossModeCombo);
     codecModeAttach = std::make_unique<CA>(apvts, "codecMode", codecModeCombo);
@@ -124,9 +136,14 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
 
     // ── Noise ─────────────────────────────────────────────────────────────────
     noiseColorCombo.addItemList({ "White", "Pink", "Brown" }, 1);
-    setupCombo(noiseColorCombo, noiseColorLabel, "COLOR");
-    setupRotary(noiseAmountSlider, noiseAmountLabel, "AMOUNT");
-    setupRotary(noiseBiasSlider, noiseBiasLabel, "BIAS");
+    setupCombo(noiseColorCombo, noiseColorLabel, "COLOR",
+        "Noise color - White is bright, Pink is balanced, Brown is deep");
+    setupRotary(noiseAmountSlider, noiseAmountLabel, "AMOUNT",
+        "Noise Amount - level of noise injected before the Loss engine");
+    setupRotary(noiseBiasSlider, noiseBiasLabel, "BIAS",
+        "Noise Bias - negative tilts noise toward lows, positive toward highs");
+
+    noiseEnabledBtn.setTooltip("Enable pre-encoding noise injection");
     addAndMakeVisible(noiseEnabledBtn);
 
     noiseEnabledAttach = std::make_unique<BA>(apvts, "noiseEnabled", noiseEnabledBtn);
@@ -136,14 +153,14 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
 
     // ── Filter ────────────────────────────────────────────────────────────────
     filterModeCombo.addItemList({ "Normal", "Inverted" }, 1);
-    setupCombo(filterModeCombo, filterModeLabel, "MODE");
-
-    filterSlopeCombo.addItemList({ "12 dB/oct", "24 dB/oct",
-                                    "36 dB/oct", "48 dB/oct" }, 1);
-    setupCombo(filterSlopeCombo, filterSlopeLabel, "SLOPE");
-
-    setupRotary(lowCutSlider, lowCutLabel, "LOW CUT");
-    setupRotary(highCutSlider, highCutLabel, "HIGH CUT");
+    setupCombo(filterModeCombo, filterModeLabel, "MODE",
+        "Filter Mode - Normal is bandpass, Inverted is bandreject");
+    setupCombo(filterSlopeCombo, filterSlopeLabel, "SLOPE",
+        "Filter Slope - steeper slopes give a harder frequency cutoff");
+    setupRotary(lowCutSlider, lowCutLabel, "LOW CUT",
+        "Low Cut Frequency - high-pass cutoff before the Loss engine");
+    setupRotary(highCutSlider, highCutLabel, "HIGH CUT",
+        "High Cut Frequency - low-pass cutoff before the Loss engine");
 
     filterModeAttach = std::make_unique<CA>(apvts, "filterMode", filterModeCombo);
     filterSlopeAttach = std::make_unique<CA>(apvts, "filterSlope", filterSlopeCombo);
@@ -152,19 +169,28 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
 
     // ── Verb ──────────────────────────────────────────────────────────────────
     verbPositionCombo.addItemList({ "Pre Loss", "Post Loss" }, 1);
-    setupCombo(verbPositionCombo, verbPositionLabel, "POSITION");
-    setupRotary(verbAmountSlider, verbAmountLabel, "AMOUNT");
-    setupRotary(verbDecaySlider, verbDecayLabel, "DECAY");
+    setupCombo(verbPositionCombo, verbPositionLabel, "POSITION",
+        "Reverb Position - Pre sends reverb into the Loss engine for extra destruction");
+    setupRotary(verbAmountSlider, verbAmountLabel, "AMOUNT",
+        "Reverb Amount - wet level of the Schroeder reverb");
+    setupRotary(verbDecaySlider, verbDecayLabel, "DECAY",
+        "Reverb Decay - controls comb filter feedback length");
 
     verbPositionAttach = std::make_unique<CA>(apvts, "verbPosition", verbPositionCombo);
     verbAmountAttach = std::make_unique<SA>(apvts, "verbAmount", verbAmountSlider);
     verbDecayAttach = std::make_unique<SA>(apvts, "verbDecay", verbDecaySlider);
 
     // ── Master ────────────────────────────────────────────────────────────────
-    setupRotary(magnitudeSlider, magnitudeLabel, "MAGNITUDE");
-    setupRotary(masterMixSlider, masterMixLabel, "MIX");
-    setupRotary(preGainSlider, preGainLabel, "PRE GAIN");
-    setupRotary(postGainSlider, postGainLabel, "POST GAIN");
+    setupRotary(magnitudeSlider, magnitudeLabel, "MAGNITUDE",
+        "Magnitude - master intensity that scales Loss, Noise, Verb, and Filter simultaneously");
+    setupRotary(masterMixSlider, masterMixLabel, "MIX",
+        "Master Mix - dry/wet blend of the entire plugin signal chain");
+    setupRotary(preGainSlider, preGainLabel, "PRE GAIN",
+        "Pre Gain - input gain applied before all processing");
+    setupRotary(postGainSlider, postGainLabel, "POST GAIN",
+        "Post Gain - output gain applied after all processing");
+
+    masterBypassBtn.setTooltip("Bypass all processing — passes audio completely unaffected");
     addAndMakeVisible(masterBypassBtn);
 
     magnitudeAttach = std::make_unique<SA>(apvts, "magnitude", magnitudeSlider);
@@ -175,13 +201,16 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
 
     // ── Advanced ──────────────────────────────────────────────────────────────
     stereoModeCombo.addItemList({ "Stereo", "Joint Stereo", "Mono" }, 1);
-    setupCombo(stereoModeCombo, stereoModeLabel, "STEREO MODE");
+    setupCombo(stereoModeCombo, stereoModeLabel, "STEREO MODE",
+        "Stereo Mode - Stereo is independent L/R, Joint applies Loss to mid only, Mono sums to centre");
 
     weightingCombo.addItemList({ "Perceptual", "Flat" }, 1);
-    setupCombo(weightingCombo, weightingLabel, "WEIGHTING");
-
-    setupRotary(autoGainSlider, autoGainLabel, "AUTO GAIN");
-    setupRotary(gateThreshSlider, gateThreshLabel, "GATE");
+    setupCombo(weightingCombo, weightingLabel, "WEIGHTING",
+        "Weighting - Perceptual applies pre/de-emphasis to preserve highs, Flat is uniform");
+    setupRotary(autoGainSlider, autoGainLabel, "AUTO GAIN",
+        "Auto Gain - compensates output level after Loss processing");
+    setupRotary(gateThreshSlider, gateThreshLabel, "GATE",
+        "Gate Threshold - silences output below this dBFS level");
 
     stereoModeAttach = std::make_unique<CA>(apvts, "stereoMode", stereoModeCombo);
     weightingAttach = std::make_unique<CA>(apvts, "weighting", weightingCombo);
@@ -190,6 +219,9 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
 
     // ── Spectrum ──────────────────────────────────────────────────────────────
     addAndMakeVisible(spectrumAnalyser);
+
+    // ── Value formatting ──────────────────────────────────────────────────────
+    setupValueFormatting();
 }
 
 //==============================================================================
@@ -199,17 +231,73 @@ ArtifactAudioProcessorEditor::~ArtifactAudioProcessorEditor()
 }
 
 //==============================================================================
+void ArtifactAudioProcessorEditor::setupValueFormatting()
+{
+    // Frequency knobs — show Hz / kHz
+    auto freqFmt = [](double v) -> juce::String
+        {
+            if (v >= 1000.0)
+                return juce::String(v / 1000.0, 2) + " kHz";
+            return juce::String((int)v) + " Hz";
+        };
+    lowCutSlider.textFromValueFunction = freqFmt;
+    highCutSlider.textFromValueFunction = freqFmt;
+
+    // Percentage knobs
+    auto pctFmt = [](double v) -> juce::String
+        {
+            return juce::String((int)v) + " %";
+        };
+    lossAmountSlider.textFromValueFunction = pctFmt;
+    lossSpeedSlider.textFromValueFunction = pctFmt;
+    noiseAmountSlider.textFromValueFunction = pctFmt;
+    magnitudeSlider.textFromValueFunction = pctFmt;
+    masterMixSlider.textFromValueFunction = pctFmt;
+    verbAmountSlider.textFromValueFunction = pctFmt;
+    verbDecaySlider.textFromValueFunction = pctFmt;
+    autoGainSlider.textFromValueFunction = pctFmt;
+
+    // dB knobs
+    auto dbFmt = [](double v) -> juce::String
+        {
+            return juce::String(v, 1) + " dB";
+        };
+    lossGainSlider.textFromValueFunction = dbFmt;
+    preGainSlider.textFromValueFunction = dbFmt;
+    postGainSlider.textFromValueFunction = dbFmt;
+    gateThreshSlider.textFromValueFunction = dbFmt;
+
+    // Noise bias — signed integer
+    noiseBiasSlider.textFromValueFunction = [](double v) -> juce::String
+        {
+            return (v >= 0 ? "+" : "") + juce::String((int)v);
+        };
+
+    // Refresh all text boxes
+    for (auto* s : { &lossAmountSlider, &lossSpeedSlider,  &lossGainSlider,
+                     &noiseAmountSlider, &noiseBiasSlider,
+                     &lowCutSlider,      &highCutSlider,
+                     &verbAmountSlider,  &verbDecaySlider,
+                     &magnitudeSlider,   &masterMixSlider,
+                     &preGainSlider,     &postGainSlider,
+                     &autoGainSlider,    &gateThreshSlider })
+        s->updateText();
+}
+
+//==============================================================================
 void ArtifactAudioProcessorEditor::setupRotary(juce::Slider& s, juce::Label& l,
-    const juce::String& text)
+    const juce::String& text,
+    const juce::String& tooltip)
 {
     s.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-    s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 14);
+    s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 64, 14);
     s.setColour(juce::Slider::textBoxTextColourId,
         juce::Colour(ArtifactLookAndFeel::colTextDim));
     s.setColour(juce::Slider::textBoxBackgroundColourId,
         juce::Colours::transparentBlack);
     s.setColour(juce::Slider::textBoxOutlineColourId,
         juce::Colours::transparentBlack);
+    s.setTooltip(tooltip);
     addAndMakeVisible(s);
 
     l.setText(text, juce::dontSendNotification);
@@ -217,27 +305,31 @@ void ArtifactAudioProcessorEditor::setupRotary(juce::Slider& s, juce::Label& l,
     l.setColour(juce::Label::textColourId,
         juce::Colour(ArtifactLookAndFeel::colTextDim));
     l.setFont(juce::Font(juce::FontOptions{}.withHeight(9.5f)));
+    l.setTooltip(tooltip);
     addAndMakeVisible(l);
 }
 
 //==============================================================================
 void ArtifactAudioProcessorEditor::setupCombo(juce::ComboBox& cb, juce::Label& l,
-    const juce::String& text)
+    const juce::String& text,
+    const juce::String& tooltip)
 {
+    cb.setTooltip(tooltip);
     addAndMakeVisible(cb);
+
     l.setText(text, juce::dontSendNotification);
     l.setJustificationType(juce::Justification::centredLeft);
     l.setColour(juce::Label::textColourId,
         juce::Colour(ArtifactLookAndFeel::colTextDim));
     l.setFont(juce::Font(juce::FontOptions{}.withHeight(9.5f)));
+    l.setTooltip(tooltip);
     addAndMakeVisible(l);
 }
 
 //==============================================================================
 void ArtifactAudioProcessorEditor::updatePresetDisplay()
 {
-    presetNameLabel.setText(audioProcessor.presetManager.getCurrentPresetName(),
-        juce::dontSendNotification);
+    presetNameBtn.setButtonText(audioProcessor.presetManager.getCurrentPresetName());
     starBtn.setToggleState(
         audioProcessor.presetManager.isFavourite(
             audioProcessor.presetManager.getCurrentPresetName()),
@@ -271,12 +363,12 @@ void ArtifactAudioProcessorEditor::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(ArtifactLookAndFeel::colBackground));
 
-    // Subtle grid texture
     g.setColour(juce::Colour(0xff131218));
-    for (int x = 0; x < getWidth(); x += 20) g.drawVerticalLine(x, 0, (float)getHeight());
-    for (int y = 0; y < getHeight(); y += 20) g.drawHorizontalLine(y, 0, (float)getWidth());
+    for (int x = 0; x < getWidth(); x += 20)
+        g.drawVerticalLine(x, 0.0f, (float)getHeight());
+    for (int y = 0; y < getHeight(); y += 20)
+        g.drawHorizontalLine(y, 0.0f, (float)getWidth());
 
-    // Preset bar separator
     g.setColour(juce::Colour(ArtifactLookAndFeel::colPanelBorder));
     g.drawHorizontalLine(44, 0.0f, (float)getWidth());
 
@@ -317,24 +409,26 @@ void ArtifactAudioProcessorEditor::resized()
     const int row2Y = row1Y + row1H + 62;
     const int row2H = getHeight() - row2Y - pad;
 
+    // ── Resize handle ─────────────────────────────────────────────────────────
+    resizeHandle.setBounds(getWidth() - 16, getHeight() - 16, 16, 16);
+
     // ── Preset bar ────────────────────────────────────────────────────────────
     pluginNameLabel.setBounds(10, 0, 100, barH);
 
     const int navW = 220;
     const int navX = (getWidth() - navW) / 2;
     presetPrevBtn.setBounds(navX, 8, 26, 28);
-    presetNameLabel.setBounds(navX + 30, 8, navW - 60, 28);
+    presetNameBtn.setBounds(navX + 30, 8, navW - 60, 28);
     presetNextBtn.setBounds(navX + navW - 26, 8, 26, 28);
 
-    // Right side: SAVE | INIT | ★ | ⇄ | ⚄
     const int rightEdge = getWidth() - 8;
-    presetSaveBtn.setBounds(rightEdge - 50, 10, 46, 24);
-    presetInitBtn.setBounds(rightEdge - 50 - 42, 10, 38, 24);
-    starBtn.setBounds(rightEdge - 50 - 42 - 30, 10, 26, 24);
-    shuffleBtn.setBounds(rightEdge - 50 - 42 - 30 - 28, 10, 26, 24);
-    diceBtn.setBounds(rightEdge - 50 - 42 - 30 - 56, 10, 26, 24);
+    presetSaveBtn.setBounds(rightEdge - 54, 10, 50, 24);
+    presetInitBtn.setBounds(rightEdge - 54 - 46, 10, 42, 24);
+    starBtn.setBounds(rightEdge - 54 - 46 - 46, 10, 42, 24);
+    shuffleBtn.setBounds(rightEdge - 54 - 46 - 92, 10, 42, 24);
+    diceBtn.setBounds(rightEdge - 54 - 46 - 138, 10, 42, 24);
 
-    // ── Spectrum analyser ─────────────────────────────────────────────────────
+    // ── Spectrum ──────────────────────────────────────────────────────────────
     spectrumAnalyser.setBounds(pad, row1Y + row1H + 2,
         getWidth() - 2 * pad, 54);
 
@@ -460,4 +554,76 @@ void ArtifactAudioProcessorEditor::resized()
         placeKnob(autoGainSlider, autoGainLabel, sx, y, cellW);
         placeKnob(gateThreshSlider, gateThreshLabel, sx + cellW, y, cellW);
     }
+}
+
+//==============================================================================
+void ArtifactAudioProcessorEditor::showPresetMenu()
+{
+    juce::PopupMenu menu;
+    menu.setLookAndFeel(&laf);
+
+    const auto allPresets = audioProcessor.presetManager.getUserPresets();
+    const auto favNames = audioProcessor.presetManager.getFavouriteNames();
+    const auto currentName = audioProcessor.presetManager.getCurrentPresetName();
+
+    // ── Favourites submenu ────────────────────────────────────────────────────
+    if (favNames.size() > 0)
+    {
+        juce::PopupMenu favMenu;
+        favMenu.setLookAndFeel(&laf);
+
+        int favId = 10000;
+        for (const auto& name : favNames)
+            favMenu.addItem(favId++, name, true, name == currentName);
+
+        menu.addSubMenu("Favourites", favMenu);
+        menu.addSeparator();
+    }
+
+    // ── Initialize ────────────────────────────────────────────────────────────
+    menu.addItem(9999, "-- Initialize --");
+    menu.addSeparator();
+
+    // ── All presets ───────────────────────────────────────────────────────────
+    int id = 1;
+    for (const auto& file : allPresets)
+    {
+        const juce::String name = file.getFileNameWithoutExtension()
+            .replaceCharacter('_', ' ');
+        menu.addItem(id++, name, true, name == currentName);
+    }
+
+    juce::PopupMenu::Options options;
+    options = options.withTargetComponent(&presetNameBtn);
+
+    menu.showMenuAsync(options,
+        [this, allPresets, favNames](int result)
+        {
+            if (result == 0) return;
+
+            if (result == 9999)
+            {
+                audioProcessor.initializeParameters();
+                presetNameBtn.setButtonText("Default");
+                return;
+            }
+
+            if (result >= 10000)
+            {
+                const int favIdx = result - 10000;
+                if (favIdx < favNames.size())
+                {
+                    audioProcessor.presetManager.loadPresetByName(favNames[favIdx]);
+                    updatePresetDisplay();
+                }
+                return;
+            }
+
+            const int presetIdx = result - 1;
+            if (presetIdx < allPresets.size())
+            {
+                audioProcessor.presetManager.loadPreset(allPresets[presetIdx]);
+                updatePresetDisplay();
+            }
+        });
 }

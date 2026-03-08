@@ -16,10 +16,29 @@ private:
     ArtifactAudioProcessor& audioProcessor;
     ArtifactLookAndFeel     laf;
 
-    void setupRotary(juce::Slider& s, juce::Label& l, const juce::String& text);
-    void setupCombo(juce::ComboBox& cb, juce::Label& l, const juce::String& text);
-    void drawSection(juce::Graphics& g, juce::Rectangle<int> b, const juce::String& title) const;
+    void setupRotary(juce::Slider& s, juce::Label& l,
+        const juce::String& labelText,
+        const juce::String& tooltip);
+    void setupCombo(juce::ComboBox& cb, juce::Label& l,
+        const juce::String& labelText,
+        const juce::String& tooltip);
+    void drawSection(juce::Graphics& g,
+        juce::Rectangle<int> b,
+        const juce::String& title) const;
     void updatePresetDisplay();
+    void setupValueFormatting();
+
+    void showPresetMenu();
+
+    // ── Tooltip window ────────────────────────────────────────────────────────
+    juce::TooltipWindow tooltipWindow{ this, 1200 };
+
+    // ── Resize handle ─────────────────────────────────────────────────────────
+    juce::ResizableCornerComponent resizeHandle{ this, nullptr };
+    static constexpr int minW = 700;
+    static constexpr int minH = 500;
+    static constexpr int maxW = 1200;
+    static constexpr int maxH = 900;
 
     // ── Preset bar ────────────────────────────────────────────────────────────
     juce::Label      pluginNameLabel;
@@ -30,7 +49,7 @@ private:
     juce::TextButton starBtn{ "FAV" };
     juce::TextButton shuffleBtn{ "RND" };
     juce::TextButton diceBtn{ "RAND" };
-    juce::Label      presetNameLabel;
+    juce::TextButton presetNameBtn;
 
     // ── Loss ──────────────────────────────────────────────────────────────────
     juce::ComboBox lossModeCombo, codecModeCombo;
