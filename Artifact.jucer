@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <JUCERPROJECT id="DjBHen" name="Artifact" projectType="audioplug" useAppConfig="0"
-              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" version="0.1.0"
+              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" version="1.0.0"
               companyName="evrshade" companyCopyright="evrshade" pluginManufacturerCode="EVRS"
               pluginCode="ARTF">
   <MAINGROUP id="TXqQi9" name="Artifact">

@@ -30,8 +30,6 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
     presetNameBtn.onClick = [this] { showPresetMenu(); };
     addAndMakeVisible(presetNameBtn);
 
-    // Make label clickable — shows preset browser popup
-
     presetPrevBtn.setTooltip("Load previous preset");
     presetPrevBtn.onClick = [this]
         {
@@ -78,6 +76,7 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
     presetInitBtn.onClick = [this]
         {
             audioProcessor.initializeParameters();
+            presetNameBtn.setButtonText("Default");
         };
     addAndMakeVisible(presetInitBtn);
 
@@ -111,13 +110,23 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
     addAndMakeVisible(diceBtn);
 
     // ── Loss ──────────────────────────────────────────────────────────────────
-    lossModeCombo.addItemList({ "Standard", "Inverse", "Phase Jitter",
-                                 "Packet Repeat", "Packet Loss",
-                                 "Std + Packet Loss", "Std + Packet Repeat",
-                                 "Packet Disorder", "Disorder + Standard" }, 1);
+    lossModeCombo.clear(juce::dontSendNotification);
+    lossModeCombo.addItem("Standard", 1);
+    lossModeCombo.addItem("Inverse", 2);
+    lossModeCombo.addItem("Phase Jitter", 3);
+    lossModeCombo.addItem("Packet Repeat", 4);
+    lossModeCombo.addItem("Packet Loss", 5);
+    lossModeCombo.addItem("Std + Packet Loss", 6);
+    lossModeCombo.addItem("Std + Packet Repeat", 7);
+    lossModeCombo.addItem("Packet Disorder", 8);
+    lossModeCombo.addItem("Disorder + Standard", 9);
     setupCombo(lossModeCombo, lossModeLabel, "MODE",
         "Loss algorithm - sets how the spectral degradation is applied");
 
+    codecModeCombo.clear(juce::dontSendNotification);
+    codecModeCombo.addItem("Music", 1);
+    codecModeCombo.addItem("Voice", 2);
+    codecModeCombo.addItem("Broadcast", 3);
     setupCombo(codecModeCombo, codecModeLabel, "CODEC",
         "Codec mode - shapes which frequency regions degrade first");
 
@@ -135,9 +144,13 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
     lossGainAttach = std::make_unique<SA>(apvts, "lossGain", lossGainSlider);
 
     // ── Noise ─────────────────────────────────────────────────────────────────
-    noiseColorCombo.addItemList({ "White", "Pink", "Brown" }, 1);
-    setupCombo(noiseColorCombo, noiseColorLabel, "COLOR",
-        "Noise color - White is bright, Pink is balanced, Brown is deep");
+    noiseColorCombo.clear(juce::dontSendNotification);
+    noiseColorCombo.addItem("White", 1);
+    noiseColorCombo.addItem("Pink", 2);
+    noiseColorCombo.addItem("Brown", 3);
+    noiseColorCombo.setTooltip("Noise color - White is bright, Pink is balanced, Brown is deep");
+    addAndMakeVisible(noiseColorCombo);
+
     setupRotary(noiseAmountSlider, noiseAmountLabel, "AMOUNT",
         "Noise Amount - level of noise injected before the Loss engine");
     setupRotary(noiseBiasSlider, noiseBiasLabel, "BIAS",
@@ -152,11 +165,20 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
     noiseBiasAttach = std::make_unique<SA>(apvts, "noiseBias", noiseBiasSlider);
 
     // ── Filter ────────────────────────────────────────────────────────────────
-    filterModeCombo.addItemList({ "Normal", "Inverted" }, 1);
+    filterModeCombo.clear(juce::dontSendNotification);
+    filterModeCombo.addItem("Normal", 1);
+    filterModeCombo.addItem("Inverted", 2);
     setupCombo(filterModeCombo, filterModeLabel, "MODE",
         "Filter Mode - Normal is bandpass, Inverted is bandreject");
+
+    filterSlopeCombo.clear(juce::dontSendNotification);
+    filterSlopeCombo.addItem("12 dB/oct", 1);
+    filterSlopeCombo.addItem("24 dB/oct", 2);
+    filterSlopeCombo.addItem("36 dB/oct", 3);
+    filterSlopeCombo.addItem("48 dB/oct", 4);
     setupCombo(filterSlopeCombo, filterSlopeLabel, "SLOPE",
         "Filter Slope - steeper slopes give a harder frequency cutoff");
+
     setupRotary(lowCutSlider, lowCutLabel, "LOW CUT",
         "Low Cut Frequency - high-pass cutoff before the Loss engine");
     setupRotary(highCutSlider, highCutLabel, "HIGH CUT",
@@ -168,9 +190,12 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
     highCutAttach = std::make_unique<SA>(apvts, "highCutFreq", highCutSlider);
 
     // ── Verb ──────────────────────────────────────────────────────────────────
-    verbPositionCombo.addItemList({ "Pre Loss", "Post Loss" }, 1);
+    verbPositionCombo.clear(juce::dontSendNotification);
+    verbPositionCombo.addItem("Pre Loss", 1);
+    verbPositionCombo.addItem("Post Loss", 2);
     setupCombo(verbPositionCombo, verbPositionLabel, "POSITION",
         "Reverb Position - Pre sends reverb into the Loss engine for extra destruction");
+
     setupRotary(verbAmountSlider, verbAmountLabel, "AMOUNT",
         "Reverb Amount - wet level of the Schroeder reverb");
     setupRotary(verbDecaySlider, verbDecayLabel, "DECAY",
@@ -190,7 +215,7 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
     setupRotary(postGainSlider, postGainLabel, "POST GAIN",
         "Post Gain - output gain applied after all processing");
 
-    masterBypassBtn.setTooltip("Bypass all processing — passes audio completely unaffected");
+    masterBypassBtn.setTooltip("Bypass all processing");
     addAndMakeVisible(masterBypassBtn);
 
     magnitudeAttach = std::make_unique<SA>(apvts, "magnitude", magnitudeSlider);
@@ -200,13 +225,19 @@ ArtifactAudioProcessorEditor::ArtifactAudioProcessorEditor(ArtifactAudioProcesso
     masterBypassAttach = std::make_unique<BA>(apvts, "masterBypass", masterBypassBtn);
 
     // ── Advanced ──────────────────────────────────────────────────────────────
-    stereoModeCombo.addItemList({ "Stereo", "Joint Stereo", "Mono" }, 1);
+    stereoModeCombo.clear(juce::dontSendNotification);
+    stereoModeCombo.addItem("Stereo", 1);
+    stereoModeCombo.addItem("Joint Stereo", 2);
+    stereoModeCombo.addItem("Mono", 3);
     setupCombo(stereoModeCombo, stereoModeLabel, "STEREO MODE",
         "Stereo Mode - Stereo is independent L/R, Joint applies Loss to mid only, Mono sums to centre");
 
-    weightingCombo.addItemList({ "Perceptual", "Flat" }, 1);
+    weightingCombo.clear(juce::dontSendNotification);
+    weightingCombo.addItem("Perceptual", 1);
+    weightingCombo.addItem("Flat", 2);
     setupCombo(weightingCombo, weightingLabel, "WEIGHTING",
         "Weighting - Perceptual applies pre/de-emphasis to preserve highs, Flat is uniform");
+
     setupRotary(autoGainSlider, autoGainLabel, "AUTO GAIN",
         "Auto Gain - compensates output level after Loss processing");
     setupRotary(gateThreshSlider, gateThreshLabel, "GATE",
@@ -473,9 +504,10 @@ void ArtifactAudioProcessorEditor::resized()
         const int sw = colW - 2 * pad;
         int y = row1Y + 26;
 
-        noiseEnabledBtn.setBounds(sx, y, 80, 22);
-        noiseColorLabel.setBounds(sx + 86, y - 12, sw - 86, 12);
-        noiseColorCombo.setBounds(sx + 86, y, sw - 86, 22);
+        // Enabled toggle and color combo on same row, full width split
+        const int toggleW = 80;
+        noiseEnabledBtn.setBounds(sx, y, toggleW, 22);
+        noiseColorCombo.setBounds(sx + toggleW + 6, y, sw - toggleW - 6, 22);
         y += 34;
 
         const int cellW = sw / 2;

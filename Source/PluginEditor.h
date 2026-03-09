@@ -60,7 +60,6 @@ private:
     // ── Noise ─────────────────────────────────────────────────────────────────
     juce::ToggleButton noiseEnabledBtn{ "Enabled" };
     juce::ComboBox     noiseColorCombo;
-    juce::Label        noiseColorLabel;
     juce::Slider       noiseAmountSlider, noiseBiasSlider;
     juce::Label        noiseAmountLabel, noiseBiasLabel;
 

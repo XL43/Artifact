@@ -457,16 +457,23 @@ void ArtifactAudioProcessor::randomizeParameters()
 
     for (auto* param : getParameters())
     {
-        // Skip bypass — don't randomly bypass the plugin
-        if (param->getName(256).containsIgnoreCase("bypass"))
-            continue;
+        if (param->getName(256).containsIgnoreCase("bypass"))      continue;
+        if (param->getName(256).containsIgnoreCase("noiseEnable")) continue;
 
-        // Skip noise enabled — don't randomly enable noise unexpectedly
-        if (param->getName(256).containsIgnoreCase("noise") &&
-            param->getName(256).containsIgnoreCase("enable"))
-            continue;
-
-        param->setValueNotifyingHost(dist(rng));
+        auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param);
+        if (ranged != nullptr)
+        {
+            // Convert random normalised → denorm → back to normalised.
+            // This forces choice parameters to snap to a valid discrete index
+            // rather than landing between choices and showing a blank combo.
+            const float denorm = ranged->convertFrom0to1(dist(rng));
+            const float normalised = ranged->convertTo0to1(denorm);
+            param->setValueNotifyingHost(normalised);
+        }
+        else
+        {
+            param->setValueNotifyingHost(dist(rng));
+        }
     }
 }
 
