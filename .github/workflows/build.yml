@@ -39,20 +39,22 @@ jobs:
           $extracted = Get-ChildItem C:\juce_extract | Select-Object -First 1
           Move-Item $extracted.FullName C:\JUCE
 
-      - name: Patch JUCE path in solution files
+      - name: Patch JUCE paths in vcxproj files
         shell: pwsh
         run: |
-          # Replace local JUCE path with CI path in all project files
-          $files = Get-ChildItem "${{ github.workspace }}\Builds" -Recurse -Include "*.vcxproj","*.props" -ErrorAction SilentlyContinue
+          # Replace any absolute or relative JUCE module path with CI path
+          $files = Get-ChildItem "${{ github.workspace }}\Builds" -Recurse -Include "*.vcxproj","*.props","*.sln" -ErrorAction SilentlyContinue
           foreach ($f in $files) {
-            $content = Get-Content $f.FullName -Raw -ErrorAction SilentlyContinue
-            if ($content -match "JUCE") {
-              $content = $content -replace 'C:\\Users\\[^\\]+\\[^;]+\\JUCE', 'C:\JUCE'
-              $content = $content -replace '[A-Za-z]:\\[^;]*JUCE[^;\\]*', 'C:\JUCE'
-              $content | Set-Content $f.FullName
-            }
+            $content = Get-Content $f.FullName -Raw -Encoding UTF8
+            # Replace Windows-style absolute paths containing JUCE
+            $content = $content -replace '[A-Za-z]:\\[^<;"]*?JUCE[^<;"]*?modules', 'C:\JUCE\modules'
+            # Replace relative paths like ../../JUCE/modules
+            $content = $content -replace '\.\.[/\\]\.\.[/\\][^<;"]*?JUCE[^<;"]*?modules', 'C:\JUCE\modules'
+            Set-Content $f.FullName $content -Encoding UTF8
           }
-          Write-Host "Patched JUCE paths in project files"
+          Write-Host "Patched JUCE paths"
+          # Show available .sln files
+          Get-ChildItem "${{ github.workspace }}\Builds" -Recurse -Filter "*.sln" | ForEach-Object { Write-Host $_.FullName }
 
       - name: Build VST3 Release
         shell: pwsh
@@ -62,31 +64,19 @@ jobs:
           Write-Host "Building: $($sln.FullName)"
           msbuild $sln.FullName /p:Configuration=Release /p:Platform=x64 -maxcpucount
 
-      - name: Find VST3 output
-        shell: pwsh
-        run: |
-          $vst3 = Get-ChildItem "${{ github.workspace }}" -Recurse -Filter "Artifact.vst3" -Directory | Select-Object -First 1
-          if ($vst3) { Write-Host "VST3 found: $($vst3.FullName)" }
-          else { Write-Host "VST3 not found in expected location, checking Program Files..."
-            $vst3 = Get-ChildItem "C:\Program Files\Common Files\VST3" -Filter "Artifact.vst3" -Directory -ErrorAction SilentlyContinue
-            if ($vst3) { Write-Host "VST3 in Program Files: $($vst3.FullName)" }
-          }
-
       - name: Install Inno Setup
         run: choco install innosetup -y
 
       - name: Build Windows installer
         shell: pwsh
         run: |
-          # Look for VST3 in build output or Program Files
           $vst3 = Get-ChildItem "${{ github.workspace }}" -Recurse -Filter "Artifact.vst3" -Directory | Select-Object -First 1
           if (-not $vst3) {
-            $vst3 = Get-ChildItem "C:\Program Files\Common Files\VST3" -Filter "Artifact.vst3" -Directory -ErrorAction SilentlyContinue
+            $vst3 = Get-ChildItem "C:\Program Files\Common Files\VST3" -Filter "Artifact.vst3" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
           }
           if (-not $vst3) { Write-Error "Cannot find Artifact.vst3"; exit 1 }
-
           $buildDir = $vst3.Parent.FullName
-          Write-Host "Using build dir: $buildDir"
+          Write-Host "VST3 parent: $buildDir"
 
           $issPath = "${{ github.workspace }}\installer\Artifact_Windows_Installer.iss"
           $content = Get-Content $issPath -Raw
@@ -125,23 +115,30 @@ jobs:
           extracted=$(ls ~/juce_extract | head -1)
           mv ~/juce_extract/"$extracted" ~/JUCE
 
-      - name: Generate Xcode project via Projucer
+      - name: Patch JUCE paths in Xcode project and regenerate
         run: |
-          # Patch the jucer file - print it first to find the right attribute
-          echo "=== JUCE-related lines in Artifact.jucer ==="
-          grep -i "juce\|folder\|path\|module" Artifact.jucer | head -20 || true
+          JUCE_MODS="$HOME/JUCE/modules"
+          echo "JUCE modules path: $JUCE_MODS"
 
-          # Try both common attribute names
-          sed -i '' 's|juceFolder="[^"]*"|juceFolder="'"$HOME"'/JUCE"|g' Artifact.jucer || true
-          sed -i '' 's|path="[^"]*JUCE[^"]*"|path="'"$HOME"'/JUCE"|g' Artifact.jucer || true
+          # Patch the .jucer MODULEPATH entries
+          sed -i '' "s|<MODULEPATH id=\"\([^\"]*\)\" path=\"[^\"]*\"/>|<MODULEPATH id=\"\1\" path=\"$JUCE_MODS\"/>|g" Artifact.jucer
+          echo "=== Patched MODULEPATH entries ==="
+          grep "MODULEPATH" Artifact.jucer | head -5
 
-          ~/JUCE/Projucer.app/Contents/MacOS/Projucer --resave Artifact.jucer || true
-          echo "=== Builds folder ==="
-          ls -la Builds/ || echo "No Builds folder - Projucer may have failed"
+          # Regenerate Xcode project with corrected paths
+          ~/JUCE/Projucer.app/Contents/MacOS/Projucer --resave Artifact.jucer
+          echo "=== Builds folder after resave ==="
+          ls -la Builds/ || echo "No Builds folder generated"
+
+          # Also patch any remaining Windows paths in the pbxproj
+          find Builds -name "*.pbxproj" | while read f; do
+            sed -i '' 's|[A-Za-z]:\\\\[^"]*JUCE[^"]*modules|'"$JUCE_MODS"'|g' "$f"
+            sed -i '' "s|\.\./\.\./[^\"']*JUCE[^\"']*/modules|$JUCE_MODS|g" "$f"
+          done
 
       - name: Build VST3 and AU
         run: |
-          xcodeproj=$(find . -name "*.xcodeproj" | grep -v JUCE | head -1)
+          xcodeproj=$(find Builds -name "*.xcodeproj" | grep -v JUCE | head -1)
           if [ -z "$xcodeproj" ]; then echo "ERROR: no xcodeproj found"; exit 1; fi
           builddir=$(dirname "$xcodeproj")
           echo "Building: $xcodeproj"
@@ -160,15 +157,14 @@ jobs:
 
           vst3=$(find . -name "Artifact.vst3" -type d | grep -v JUCE | head -1)
           au=$(find   . -name "Artifact.component" -type d | grep -v JUCE | head -1)
-          echo "VST3: $vst3"
-          echo "AU:   $au"
+          echo "VST3: $vst3  AU: $au"
           [ -n "$vst3" ] && cp -r "$vst3" /tmp/artifact_stage/Library/Audio/Plug-Ins/VST3/
           [ -n "$au"   ] && cp -r "$au"   /tmp/artifact_stage/Library/Audio/Plug-Ins/Components/
 
           mkdir -p mac_output
           pkgbuild \
             --root /tmp/artifact_stage \
-            --identifier "com.YourName.Artifact" \
+            --identifier "com.evrshade.Artifact" \
             --version "1.0.0" \
             --install-location "/" \
             mac_output/Artifact_component.pkg
@@ -216,27 +212,29 @@ jobs:
           extracted=$(ls ~/juce_extract | head -1)
           mv ~/juce_extract/"$extracted" ~/JUCE
 
-      - name: Build Projucer and generate Makefile project
+      - name: Build Projucer
         run: |
           cd ~/JUCE/extras/Projucer/Builds/LinuxMakefile
           make CONFIG=Release -j$(nproc)
 
-          # Print jucer file to find path attribute
-          echo "=== JUCE-related lines in Artifact.jucer ==="
-          grep -i "juce\|folder\|path\|module" "$GITHUB_WORKSPACE/Artifact.jucer" | head -20 || true
+      - name: Patch JUCE paths and regenerate Makefile project
+        run: |
+          JUCE_MODS="$HOME/JUCE/modules"
+          echo "JUCE modules path: $JUCE_MODS"
 
-          # Patch both common attribute names
-          cd "$GITHUB_WORKSPACE"
-          sed -i 's|juceFolder="[^"]*"|juceFolder="'"$HOME"'/JUCE"|g' Artifact.jucer || true
-          sed -i 's|path="[^"]*JUCE[^"]*"|path="'"$HOME"'/JUCE"|g' Artifact.jucer || true
+          # Patch the .jucer MODULEPATH entries
+          sed -i "s|<MODULEPATH id=\"\([^\"]*\)\" path=\"[^\"]*\"/>|<MODULEPATH id=\"\1\" path=\"$JUCE_MODS\"/>|g" Artifact.jucer
+          echo "=== Patched MODULEPATH entries ==="
+          grep "MODULEPATH" Artifact.jucer | head -5
 
-          ~/JUCE/extras/Projucer/Builds/LinuxMakefile/build/Projucer --resave Artifact.jucer || true
-          echo "=== Builds folder ==="
+          # Regenerate Linux Makefile with corrected paths
+          ~/JUCE/extras/Projucer/Builds/LinuxMakefile/build/Projucer --resave Artifact.jucer
+          echo "=== Builds folder after resave ==="
           ls -la Builds/ || echo "No Builds folder"
 
       - name: Build VST3 Release
         run: |
-          makedir=$(find Builds -name "Makefile" | head -1 | xargs -I{} dirname {} 2>/dev/null)
+          makedir=$(find Builds -name "Makefile" | head -1 | xargs -I{} dirname {})
           if [ -z "$makedir" ]; then echo "ERROR: no Makefile found"; exit 1; fi
           echo "Building in: $makedir"
           cd "$makedir"
@@ -246,7 +244,7 @@ jobs:
         run: |
           STAGE="$GITHUB_WORKSPACE/linux_package"
           mkdir -p "$STAGE"
-          vst3=$(find . -name "Artifact.vst3" -type d | grep -v JUCE | head -1)
+          vst3=$(find Builds -name "Artifact.vst3" -type d | grep -v JUCE | head -1)
           [ -n "$vst3" ] && cp -r "$vst3" "$STAGE/"
           cp installer/install_linux.sh "$STAGE/"
           chmod +x "$STAGE/install_linux.sh"
