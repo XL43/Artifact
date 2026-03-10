@@ -45,19 +45,28 @@ jobs:
           msbuild C:\JUCE\extras\Projucer\Builds\VisualStudio2022\Projucer.sln `
             /p:Configuration=Release /p:Platform=x64 -maxcpucount
 
-      - name: Resave project and list generated folders
+      - name: Patch jucer JUCE path and resave
         shell: pwsh
         run: |
+          $jucer = "${{ github.workspace }}\Artifact.jucer"
+          $content = Get-Content $jucer -Raw
+          # Replace any existing juceFolder path with CI path
+          $content = $content -replace 'juceFolder="[^"]*"', 'juceFolder="C:\JUCE"'
+          $content | Set-Content $jucer
+          Write-Host "=== juceFolder line ==="
+          Select-String "juceFolder" $jucer
+
           $projucer = "C:\JUCE\extras\Projucer\Builds\VisualStudio2022\x64\Release\App\Projucer.exe"
-          & $projucer --resave "${{ github.workspace }}\Artifact.jucer"
-          Write-Host "=== Builds folder contents ==="
+          & $projucer --resave "$jucer"
+
+          Write-Host "=== Builds folder ==="
           Get-ChildItem "${{ github.workspace }}\Builds" -ErrorAction SilentlyContinue
 
       - name: Build VST3 Release
         shell: pwsh
         run: |
-          # Find the generated solution — works regardless of VS version in jucer
           $sln = Get-ChildItem "${{ github.workspace }}\Builds" -Recurse -Filter "*.sln" | Select-Object -First 1
+          if (-not $sln) { Write-Error "No .sln found in Builds/"; exit 1 }
           Write-Host "Building: $($sln.FullName)"
           msbuild $sln.FullName /p:Configuration=Release /p:Platform=x64 -maxcpucount
 
@@ -67,17 +76,15 @@ jobs:
       - name: Build Windows installer
         shell: pwsh
         run: |
-          # Find the VST3 output folder
           $vst3 = Get-ChildItem "${{ github.workspace }}\Builds" -Recurse -Filter "Artifact.vst3" -Directory | Select-Object -First 1
-          Write-Host "VST3 found at: $($vst3.FullName)"
-          $buildDir = $vst3.Parent.Parent.FullName
-          Write-Host "Build dir: $buildDir"
+          if (-not $vst3) { Write-Error "Artifact.vst3 not found"; exit 1 }
+          $buildDir = $vst3.Parent.FullName
+          Write-Host "VST3 parent dir: $buildDir"
 
           $issPath = "${{ github.workspace }}\installer\Artifact_Windows_Installer.iss"
           $content = Get-Content $issPath -Raw
           $content = $content -replace '#define SourceDir.*', "#define SourceDir `"$buildDir`""
           $content | Set-Content $issPath
-
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" $issPath
 
       - name: Upload Windows installer
@@ -111,18 +118,25 @@ jobs:
           extracted=$(ls ~/juce_extract | head -1)
           mv ~/juce_extract/"$extracted" ~/JUCE
 
-      - name: Resave project and list generated folders
+      - name: Patch jucer JUCE path and resave
         run: |
+          JUCE_PATH="$HOME/JUCE"
+          # Replace juceFolder in the .jucer file
+          sed -i '' "s|juceFolder=\"[^\"]*\"|juceFolder=\"$JUCE_PATH\"|g" Artifact.jucer
+          echo "=== juceFolder line ==="
+          grep "juceFolder" Artifact.jucer
+
           ~/JUCE/Projucer.app/Contents/MacOS/Projucer --resave Artifact.jucer
-          echo "=== Builds folder contents ==="
-          ls -la Builds/ || echo "No Builds folder found"
+
+          echo "=== Builds folder ==="
+          ls -la Builds/ || echo "Builds folder not created"
 
       - name: Build VST3 and AU
         run: |
-          # Find the xcodeproj regardless of folder name
           xcodeproj=$(find Builds -name "*.xcodeproj" | head -1)
+          if [ -z "$xcodeproj" ]; then echo "ERROR: no xcodeproj found"; exit 1; fi
           builddir=$(dirname "$xcodeproj")
-          echo "Building: $xcodeproj"
+          echo "Building: $xcodeproj in $builddir"
           xcodebuild \
             -project "$xcodeproj" \
             -scheme "Artifact - All" \
@@ -134,16 +148,14 @@ jobs:
       - name: Stage and package
         run: |
           builddir=$(find Builds -name "*.xcodeproj" | head -1 | xargs dirname)
-          BUILD_OUT="$builddir/build/Release"
-          echo "Looking for plugins in: $BUILD_OUT"
-          find "$builddir/build" -name "*.vst3" -o -name "*.component" 2>/dev/null || true
+          echo "Searching for plugins in $builddir/build"
+          find "$builddir/build" \( -name "*.vst3" -o -name "*.component" \) 2>/dev/null || true
 
           mkdir -p /tmp/artifact_stage/Library/Audio/Plug-Ins/VST3
           mkdir -p /tmp/artifact_stage/Library/Audio/Plug-Ins/Components
 
           vst3=$(find "$builddir/build" -name "Artifact.vst3" -type d | head -1)
-          au=$(find "$builddir/build" -name "Artifact.component" -type d | head -1)
-
+          au=$(find   "$builddir/build" -name "Artifact.component" -type d | head -1)
           [ -n "$vst3" ] && cp -r "$vst3" /tmp/artifact_stage/Library/Audio/Plug-Ins/VST3/
           [ -n "$au"   ] && cp -r "$au"   /tmp/artifact_stage/Library/Audio/Plug-Ins/Components/
 
@@ -154,7 +166,6 @@ jobs:
             --version "1.0.0" \
             --install-location "/" \
             mac_output/Artifact_component.pkg
-
           productbuild \
             --package mac_output/Artifact_component.pkg \
             --version "1.0.0" \
@@ -204,17 +215,23 @@ jobs:
           cd ~/JUCE/extras/Projucer/Builds/LinuxMakefile
           make CONFIG=Release -j$(nproc)
 
-      - name: Resave project and list generated folders
+      - name: Patch jucer JUCE path and resave
         run: |
+          JUCE_PATH="$HOME/JUCE"
+          sed -i "s|juceFolder=\"[^\"]*\"|juceFolder=\"$JUCE_PATH\"|g" Artifact.jucer
+          echo "=== juceFolder line ==="
+          grep "juceFolder" Artifact.jucer
+
           ~/JUCE/extras/Projucer/Builds/LinuxMakefile/build/Projucer \
             --resave Artifact.jucer
-          echo "=== Builds folder contents ==="
-          ls -la Builds/ || echo "No Builds folder"
+
+          echo "=== Builds folder ==="
+          ls -la Builds/ || echo "Builds folder not created"
 
       - name: Build VST3 Release
         run: |
-          # Find the Makefile folder regardless of name
-          makedir=$(find Builds -name "Makefile" | head -1 | xargs dirname)
+          makedir=$(find Builds -name "Makefile" | head -1 | xargs -I{} dirname {})
+          if [ -z "$makedir" ]; then echo "ERROR: no Makefile found in Builds/"; exit 1; fi
           echo "Building in: $makedir"
           cd "$makedir"
           make CONFIG=Release -j$(nproc)
@@ -224,7 +241,7 @@ jobs:
           STAGE="$GITHUB_WORKSPACE/linux_package"
           mkdir -p "$STAGE"
           vst3=$(find Builds -name "Artifact.vst3" -type d | head -1)
-          standalone=$(find Builds -name "Artifact" -type f | head -1)
+          standalone=$(find Builds -name "Artifact" -not -name "*.vst3" -type f | head -1)
           [ -n "$vst3"       ] && cp -r "$vst3"       "$STAGE/"
           [ -n "$standalone" ] && cp    "$standalone"  "$STAGE/"
           cp installer/install_linux.sh "$STAGE/"
@@ -256,17 +273,17 @@ jobs:
         with:
           name: "Artifact ${{ github.ref_name }}"
           body: |
-            ## Artifact ${{ github.ref_name }} — Digital Degradation Plugin
+            ## Artifact ${{ github.ref_name }} - Digital Degradation Plugin
 
             | Platform | File | Format |
             |----------|------|--------|
-            | Windows  | `Artifact_v*_Windows_Setup.exe` | VST3 installer |
-            | macOS    | `Artifact_v*_macOS.pkg` | VST3 + AU installer |
-            | Linux    | `Artifact_v*_Linux.tar.gz` | VST3 + install script |
+            | Windows  | Artifact_v*_Windows_Setup.exe | VST3 installer |
+            | macOS    | Artifact_v*_macOS.pkg | VST3 + AU installer |
+            | Linux    | Artifact_v*_Linux.tar.gz | VST3 + install script |
 
-            **Windows:** Run the `.exe`, rescan plugins in your DAW.
-            **macOS:** Open the `.pkg`, rescan plugins in your DAW.
-            **Linux:** Extract the `.tar.gz`, run `sudo ./install_linux.sh`.
+            **Windows:** Run the .exe, rescan plugins in your DAW.
+            **macOS:** Open the .pkg, rescan plugins in your DAW.
+            **Linux:** Extract the .tar.gz, run sudo ./install_linux.sh.
           files: |
             artifacts/windows-installer/*.exe
             artifacts/macos-installer/*.pkg
