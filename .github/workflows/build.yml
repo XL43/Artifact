@@ -8,7 +8,6 @@ on:
 
 env:
   JUCE_VERSION: "8.0.10"
-  PLUGIN_NAME: "Artifact"
 
 jobs:
   # ── Windows Build ────────────────────────────────────────────────────────────
@@ -19,6 +18,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
 
       - name: Cache JUCE
         uses: actions/cache@v4
@@ -37,19 +39,27 @@ jobs:
           $extracted = Get-ChildItem C:\juce_extract | Select-Object -First 1
           Move-Item $extracted.FullName C:\JUCE
 
-      - name: Build Projucer and resave project
+      - name: Build Projucer
         shell: pwsh
         run: |
-          cd C:\JUCE\extras\Projucer\Builds\VisualStudio2022
-          msbuild Projucer.sln /p:Configuration=Release /p:Platform=x64 -maxcpucount
+          msbuild C:\JUCE\extras\Projucer\Builds\VisualStudio2022\Projucer.sln `
+            /p:Configuration=Release /p:Platform=x64 -maxcpucount
+
+      - name: Resave project and list generated folders
+        shell: pwsh
+        run: |
           $projucer = "C:\JUCE\extras\Projucer\Builds\VisualStudio2022\x64\Release\App\Projucer.exe"
           & $projucer --resave "${{ github.workspace }}\Artifact.jucer"
+          Write-Host "=== Builds folder contents ==="
+          Get-ChildItem "${{ github.workspace }}\Builds" -ErrorAction SilentlyContinue
 
       - name: Build VST3 Release
         shell: pwsh
         run: |
-          cd "${{ github.workspace }}\Builds\VisualStudio2022"
-          msbuild Artifact.sln /p:Configuration=Release /p:Platform=x64 -maxcpucount
+          # Find the generated solution — works regardless of VS version in jucer
+          $sln = Get-ChildItem "${{ github.workspace }}\Builds" -Recurse -Filter "*.sln" | Select-Object -First 1
+          Write-Host "Building: $($sln.FullName)"
+          msbuild $sln.FullName /p:Configuration=Release /p:Platform=x64 -maxcpucount
 
       - name: Install Inno Setup
         run: choco install innosetup -y
@@ -57,11 +67,17 @@ jobs:
       - name: Build Windows installer
         shell: pwsh
         run: |
+          # Find the VST3 output folder
+          $vst3 = Get-ChildItem "${{ github.workspace }}\Builds" -Recurse -Filter "Artifact.vst3" -Directory | Select-Object -First 1
+          Write-Host "VST3 found at: $($vst3.FullName)"
+          $buildDir = $vst3.Parent.Parent.FullName
+          Write-Host "Build dir: $buildDir"
+
           $issPath = "${{ github.workspace }}\installer\Artifact_Windows_Installer.iss"
           $content = Get-Content $issPath -Raw
-          $buildPath = "${{ github.workspace }}\Builds\VisualStudio2022\x64\Release"
-          $content = $content -replace '#define SourceDir.*', "#define SourceDir `"$buildPath`""
+          $content = $content -replace '#define SourceDir.*', "#define SourceDir `"$buildDir`""
           $content | Set-Content $issPath
+
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" $issPath
 
       - name: Upload Windows installer
@@ -69,6 +85,7 @@ jobs:
         with:
           name: windows-installer
           path: "${{ github.workspace }}\\installer\\Output\\*.exe"
+          if-no-files-found: warn
 
   # ── macOS Build ──────────────────────────────────────────────────────────────
   build-macos:
@@ -94,53 +111,61 @@ jobs:
           extracted=$(ls ~/juce_extract | head -1)
           mv ~/juce_extract/"$extracted" ~/JUCE
 
-      - name: Generate Xcode project
+      - name: Resave project and list generated folders
         run: |
           ~/JUCE/Projucer.app/Contents/MacOS/Projucer --resave Artifact.jucer
-
-      - name: Stage plugin files
-        run: |
-          BUILD_DIR="Builds/MacOSX/build/Release"
-          mkdir -p /tmp/artifact_stage/Library/Audio/Plug-Ins/VST3
-          mkdir -p /tmp/artifact_stage/Library/Audio/Plug-Ins/Components
-          if [ -d "$BUILD_DIR/VST3/Artifact.vst3" ]; then
-            cp -r "$BUILD_DIR/VST3/Artifact.vst3" /tmp/artifact_stage/Library/Audio/Plug-Ins/VST3/
-          fi
-          if [ -d "$BUILD_DIR/AU/Artifact.component" ]; then
-            cp -r "$BUILD_DIR/AU/Artifact.component" /tmp/artifact_stage/Library/Audio/Plug-Ins/Components/
-          fi
+          echo "=== Builds folder contents ==="
+          ls -la Builds/ || echo "No Builds folder found"
 
       - name: Build VST3 and AU
         run: |
-          cd Builds/MacOSX
+          # Find the xcodeproj regardless of folder name
+          xcodeproj=$(find Builds -name "*.xcodeproj" | head -1)
+          builddir=$(dirname "$xcodeproj")
+          echo "Building: $xcodeproj"
           xcodebuild \
-            -project Artifact.xcodeproj \
+            -project "$xcodeproj" \
             -scheme "Artifact - All" \
             -configuration Release \
             ONLY_ACTIVE_ARCH=NO \
-            BUILD_DIR=build \
+            BUILD_DIR="$builddir/build" \
             build
 
-      - name: Build macOS pkg
+      - name: Stage and package
         run: |
-          OUTPUT_DIR="$GITHUB_WORKSPACE/mac_output"
-          mkdir -p "$OUTPUT_DIR"
+          builddir=$(find Builds -name "*.xcodeproj" | head -1 | xargs dirname)
+          BUILD_OUT="$builddir/build/Release"
+          echo "Looking for plugins in: $BUILD_OUT"
+          find "$builddir/build" -name "*.vst3" -o -name "*.component" 2>/dev/null || true
+
+          mkdir -p /tmp/artifact_stage/Library/Audio/Plug-Ins/VST3
+          mkdir -p /tmp/artifact_stage/Library/Audio/Plug-Ins/Components
+
+          vst3=$(find "$builddir/build" -name "Artifact.vst3" -type d | head -1)
+          au=$(find "$builddir/build" -name "Artifact.component" -type d | head -1)
+
+          [ -n "$vst3" ] && cp -r "$vst3" /tmp/artifact_stage/Library/Audio/Plug-Ins/VST3/
+          [ -n "$au"   ] && cp -r "$au"   /tmp/artifact_stage/Library/Audio/Plug-Ins/Components/
+
+          mkdir -p mac_output
           pkgbuild \
             --root /tmp/artifact_stage \
             --identifier "com.YourName.Artifact" \
             --version "1.0.0" \
             --install-location "/" \
-            "$OUTPUT_DIR/Artifact_component.pkg"
+            mac_output/Artifact_component.pkg
+
           productbuild \
-            --package "$OUTPUT_DIR/Artifact_component.pkg" \
+            --package mac_output/Artifact_component.pkg \
             --version "1.0.0" \
-            "$OUTPUT_DIR/Artifact_v1.0.0_macOS.pkg"
+            mac_output/Artifact_v1.0.0_macOS.pkg
 
       - name: Upload macOS installer
         uses: actions/upload-artifact@v4
         with:
           name: macos-installer
-          path: "${{ github.workspace }}/mac_output/Artifact_v1.0.0_macOS.pkg"
+          path: mac_output/Artifact_v1.0.0_macOS.pkg
+          if-no-files-found: warn
 
   # ── Linux Build ──────────────────────────────────────────────────────────────
   build-linux:
@@ -179,23 +204,29 @@ jobs:
           cd ~/JUCE/extras/Projucer/Builds/LinuxMakefile
           make CONFIG=Release -j$(nproc)
 
-      - name: Generate Makefile project
+      - name: Resave project and list generated folders
         run: |
           ~/JUCE/extras/Projucer/Builds/LinuxMakefile/build/Projucer \
             --resave Artifact.jucer
+          echo "=== Builds folder contents ==="
+          ls -la Builds/ || echo "No Builds folder"
 
       - name: Build VST3 Release
         run: |
-          cd Builds/LinuxMakefile
+          # Find the Makefile folder regardless of name
+          makedir=$(find Builds -name "Makefile" | head -1 | xargs dirname)
+          echo "Building in: $makedir"
+          cd "$makedir"
           make CONFIG=Release -j$(nproc)
 
       - name: Package Linux tarball
         run: |
           STAGE="$GITHUB_WORKSPACE/linux_package"
-          BUILD="Builds/LinuxMakefile/build"
           mkdir -p "$STAGE"
-          [ -d "$BUILD/Artifact.vst3" ] && cp -r "$BUILD/Artifact.vst3" "$STAGE/"
-          [ -f "$BUILD/Artifact" ]      && cp "$BUILD/Artifact" "$STAGE/"
+          vst3=$(find Builds -name "Artifact.vst3" -type d | head -1)
+          standalone=$(find Builds -name "Artifact" -type f | head -1)
+          [ -n "$vst3"       ] && cp -r "$vst3"       "$STAGE/"
+          [ -n "$standalone" ] && cp    "$standalone"  "$STAGE/"
           cp installer/install_linux.sh "$STAGE/"
           chmod +x "$STAGE/install_linux.sh"
           tar -czf Artifact_v1.0.0_Linux.tar.gz -C "$STAGE" .
@@ -204,7 +235,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-package
-          path: "${{ github.workspace }}/Artifact_v1.0.0_Linux.tar.gz"
+          path: Artifact_v1.0.0_Linux.tar.gz
+          if-no-files-found: warn
 
   # ── Create GitHub Release ─────────────────────────────────────────────────────
   release:
