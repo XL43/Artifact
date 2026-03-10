@@ -1,34 +1,14 @@
-# Artifact — GitHub Actions Build & Release Workflow
-# File: .github/workflows/build.yml
-#
-# HOW TO USE:
-#   1. Push your project to a GitHub repository
-#   2. Create this file at .github/workflows/build.yml in your repo
-#   3. To trigger a release build, create and push a version tag:
-#        git tag v1.0.0
-#        git push origin v1.0.0
-#   4. GitHub will automatically build on Windows, macOS, and Linux,
-#      then create a Release with all three installers attached.
-#
-# SETUP REQUIRED:
-#   - In your GitHub repo → Settings → Secrets and variables → Actions
-#   - No secrets required for unsigned builds
-#   - For macOS signing, add: APPLE_DEVELOPER_CERTIFICATE_P12_BASE64
-#                             APPLE_DEVELOPER_CERTIFICATE_PASSWORD
-#                             APPLE_DEVELOPER_IDENTITY
-
 name: Build and Release Artifact
 
 on:
   push:
     tags:
-      - 'v*'           # Triggers on version tags like v1.0.0
-  workflow_dispatch:   # Also allows manual trigger from GitHub UI
+      - 'v*'
+  workflow_dispatch:
 
 env:
   JUCE_VERSION: "8.0.10"
   PLUGIN_NAME: "Artifact"
-  PLUGIN_VERSION: ${{ github.ref_name }}
 
 jobs:
   # ── Windows Build ────────────────────────────────────────────────────────────
@@ -39,8 +19,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Cache JUCE
         uses: actions/cache@v4
@@ -49,23 +27,26 @@ jobs:
           path: C:\JUCE
           key: juce-${{ env.JUCE_VERSION }}-windows
 
-      - name: Download JUCE
+      - name: Download and extract JUCE
         if: steps.cache-juce.outputs.cache-hit != 'true'
+        shell: pwsh
         run: |
           $url = "https://github.com/juce-framework/JUCE/releases/download/${{ env.JUCE_VERSION }}/juce-${{ env.JUCE_VERSION }}-windows.zip"
           Invoke-WebRequest -Uri $url -OutFile juce.zip
-          Expand-Archive juce.zip -DestinationPath C:\
-          Rename-Item "C:\JUCE ${{ env.JUCE_VERSION }}" "C:\JUCE"
+          Expand-Archive juce.zip -DestinationPath C:\juce_extract
+          $extracted = Get-ChildItem C:\juce_extract | Select-Object -First 1
+          Move-Item $extracted.FullName C:\JUCE
 
-      - name: Install Projucer and generate VS solution
+      - name: Build Projucer and resave project
+        shell: pwsh
         run: |
-          # Build Projucer from source if not cached
           cd C:\JUCE\extras\Projucer\Builds\VisualStudio2022
           msbuild Projucer.sln /p:Configuration=Release /p:Platform=x64 -maxcpucount
           $projucer = "C:\JUCE\extras\Projucer\Builds\VisualStudio2022\x64\Release\App\Projucer.exe"
           & $projucer --resave "${{ github.workspace }}\Artifact.jucer"
 
-      - name: Build VST3 (Release)
+      - name: Build VST3 Release
+        shell: pwsh
         run: |
           cd "${{ github.workspace }}\Builds\VisualStudio2022"
           msbuild Artifact.sln /p:Configuration=Release /p:Platform=x64 -maxcpucount
@@ -73,19 +54,15 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y
 
-      - name: Copy manual for installer
-        run: |
-          copy "${{ github.workspace }}\Artifact_Manual_v1.0.0.pdf" "${{ github.workspace }}\installer\"
-        continue-on-error: true
-
       - name: Build Windows installer
+        shell: pwsh
         run: |
-          $iss = "${{ github.workspace }}\installer\Artifact_Windows_Installer.iss"
-          # Update SourceDir in the .iss file to the CI build path
-          $content = Get-Content $iss
-          $content = $content -replace '#define SourceDir.*', '#define SourceDir "${{ github.workspace }}\Builds\VisualStudio2022\x64\Release"'
-          $content | Set-Content $iss
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" $iss
+          $issPath = "${{ github.workspace }}\installer\Artifact_Windows_Installer.iss"
+          $content = Get-Content $issPath -Raw
+          $buildPath = "${{ github.workspace }}\Builds\VisualStudio2022\x64\Release"
+          $content = $content -replace '#define SourceDir.*', "#define SourceDir `"$buildPath`""
+          $content | Set-Content $issPath
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" $issPath
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
@@ -101,8 +78,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Cache JUCE
         uses: actions/cache@v4
@@ -111,69 +86,61 @@ jobs:
           path: ~/JUCE
           key: juce-${{ env.JUCE_VERSION }}-macos
 
-      - name: Download JUCE
+      - name: Download and extract JUCE
         if: steps.cache-juce.outputs.cache-hit != 'true'
         run: |
           curl -L "https://github.com/juce-framework/JUCE/releases/download/${{ env.JUCE_VERSION }}/juce-${{ env.JUCE_VERSION }}-osx.zip" -o juce.zip
-          unzip juce.zip -d ~/
-          mv ~/JUCE* ~/JUCE
+          unzip juce.zip -d ~/juce_extract
+          extracted=$(ls ~/juce_extract | head -1)
+          mv ~/juce_extract/"$extracted" ~/JUCE
 
       - name: Generate Xcode project
         run: |
           ~/JUCE/Projucer.app/Contents/MacOS/Projucer --resave Artifact.jucer
 
-      - name: Build VST3 and AU (Release)
+      - name: Stage plugin files
+        run: |
+          BUILD_DIR="Builds/MacOSX/build/Release"
+          mkdir -p /tmp/artifact_stage/Library/Audio/Plug-Ins/VST3
+          mkdir -p /tmp/artifact_stage/Library/Audio/Plug-Ins/Components
+          if [ -d "$BUILD_DIR/VST3/Artifact.vst3" ]; then
+            cp -r "$BUILD_DIR/VST3/Artifact.vst3" /tmp/artifact_stage/Library/Audio/Plug-Ins/VST3/
+          fi
+          if [ -d "$BUILD_DIR/AU/Artifact.component" ]; then
+            cp -r "$BUILD_DIR/AU/Artifact.component" /tmp/artifact_stage/Library/Audio/Plug-Ins/Components/
+          fi
+
+      - name: Build VST3 and AU
         run: |
           cd Builds/MacOSX
           xcodebuild \
             -project Artifact.xcodeproj \
             -scheme "Artifact - All" \
             -configuration Release \
-            -arch x86_64 -arch arm64 \
             ONLY_ACTIVE_ARCH=NO \
             BUILD_DIR=build \
             build
 
-      - name: Build macOS pkg installer
+      - name: Build macOS pkg
         run: |
-          chmod +x installer/build_mac_installer.sh
-          BUILD_DIR="$GITHUB_WORKSPACE/Builds/MacOSX/build/Release"
-          OUTPUT_DIR="$GITHUB_WORKSPACE/installer/mac_output"
+          OUTPUT_DIR="$GITHUB_WORKSPACE/mac_output"
           mkdir -p "$OUTPUT_DIR"
-
-          # Build component package
           pkgbuild \
             --root /tmp/artifact_stage \
             --identifier "com.YourName.Artifact" \
             --version "1.0.0" \
             --install-location "/" \
             "$OUTPUT_DIR/Artifact_component.pkg"
-
           productbuild \
             --package "$OUTPUT_DIR/Artifact_component.pkg" \
             --version "1.0.0" \
             "$OUTPUT_DIR/Artifact_v1.0.0_macOS.pkg"
 
-      - name: Stage plugin files for pkg
-        run: |
-          BUILD_DIR="Builds/MacOSX/build/Release"
-          mkdir -p /tmp/artifact_stage/Library/Audio/Plug-Ins/VST3
-          mkdir -p /tmp/artifact_stage/Library/Audio/Plug-Ins/Components
-
-          if [ -d "$BUILD_DIR/VST3/Artifact.vst3" ]; then
-            cp -r "$BUILD_DIR/VST3/Artifact.vst3" \
-              /tmp/artifact_stage/Library/Audio/Plug-Ins/VST3/
-          fi
-          if [ -d "$BUILD_DIR/AU/Artifact.component" ]; then
-            cp -r "$BUILD_DIR/AU/Artifact.component" \
-              /tmp/artifact_stage/Library/Audio/Plug-Ins/Components/
-          fi
-
       - name: Upload macOS installer
         uses: actions/upload-artifact@v4
         with:
           name: macos-installer
-          path: "${{ github.workspace }}/installer/mac_output/*.pkg"
+          path: "${{ github.workspace }}/mac_output/Artifact_v1.0.0_macOS.pkg"
 
   # ── Linux Build ──────────────────────────────────────────────────────────────
   build-linux:
@@ -183,22 +150,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - name: Install JUCE dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libasound2-dev \
-            libx11-dev \
-            libxinerama-dev \
-            libxext-dev \
-            libfreetype6-dev \
-            libwebkit2gtk-4.0-dev \
-            libglu1-mesa-dev \
-            libcurl4-openssl-dev \
-            libjack-jackd2-dev
+            libasound2-dev libx11-dev libxinerama-dev libxext-dev \
+            libfreetype6-dev libwebkit2gtk-4.0-dev libglu1-mesa-dev \
+            libcurl4-openssl-dev libjack-jackd2-dev
 
       - name: Cache JUCE
         uses: actions/cache@v4
@@ -207,12 +166,13 @@ jobs:
           path: ~/JUCE
           key: juce-${{ env.JUCE_VERSION }}-linux
 
-      - name: Download JUCE
+      - name: Download and extract JUCE
         if: steps.cache-juce.outputs.cache-hit != 'true'
         run: |
           curl -L "https://github.com/juce-framework/JUCE/releases/download/${{ env.JUCE_VERSION }}/juce-${{ env.JUCE_VERSION }}-linux.zip" -o juce.zip
-          unzip juce.zip -d ~/
-          mv ~/JUCE* ~/JUCE
+          unzip juce.zip -d ~/juce_extract
+          extracted=$(ls ~/juce_extract | head -1)
+          mv ~/juce_extract/"$extracted" ~/JUCE
 
       - name: Build Projucer
         run: |
@@ -224,35 +184,21 @@ jobs:
           ~/JUCE/extras/Projucer/Builds/LinuxMakefile/build/Projucer \
             --resave Artifact.jucer
 
-      - name: Build VST3 (Release)
+      - name: Build VST3 Release
         run: |
           cd Builds/LinuxMakefile
           make CONFIG=Release -j$(nproc)
 
-      - name: Package Linux installer
+      - name: Package Linux tarball
         run: |
-          STAGE_DIR="$GITHUB_WORKSPACE/linux_package"
-          BUILD_DIR="Builds/LinuxMakefile/build"
-          mkdir -p "$STAGE_DIR"
-
-          # Copy VST3
-          if [ -d "$BUILD_DIR/Artifact.vst3" ]; then
-            cp -r "$BUILD_DIR/Artifact.vst3" "$STAGE_DIR/"
-          fi
-
-          # Copy standalone
-          if [ -f "$BUILD_DIR/Artifact" ]; then
-            cp "$BUILD_DIR/Artifact" "$STAGE_DIR/"
-          fi
-
-          # Copy manual and install script
-          cp installer/install_linux.sh "$STAGE_DIR/"
-          cp Artifact_Manual_v1.0.0.pdf "$STAGE_DIR/" 2>/dev/null || true
-          chmod +x "$STAGE_DIR/install_linux.sh"
-
-          # Create tarball
-          cd "$GITHUB_WORKSPACE"
-          tar -czf "Artifact_v1.0.0_Linux.tar.gz" -C "$STAGE_DIR" .
+          STAGE="$GITHUB_WORKSPACE/linux_package"
+          BUILD="Builds/LinuxMakefile/build"
+          mkdir -p "$STAGE"
+          [ -d "$BUILD/Artifact.vst3" ] && cp -r "$BUILD/Artifact.vst3" "$STAGE/"
+          [ -f "$BUILD/Artifact" ]      && cp "$BUILD/Artifact" "$STAGE/"
+          cp installer/install_linux.sh "$STAGE/"
+          chmod +x "$STAGE/install_linux.sh"
+          tar -czf Artifact_v1.0.0_Linux.tar.gz -C "$STAGE" .
 
       - name: Upload Linux package
         uses: actions/upload-artifact@v4
@@ -280,25 +226,16 @@ jobs:
           body: |
             ## Artifact ${{ github.ref_name }} — Digital Degradation Plugin
 
-            ### Downloads
             | Platform | File | Format |
             |----------|------|--------|
-            | Windows  | `Artifact_v*_Windows_Setup.exe` | VST3 + Standalone installer |
-            | macOS    | `Artifact_v*_macOS.pkg` | VST3 + AU + Standalone installer |
-            | Linux    | `Artifact_v*_Linux.tar.gz` | VST3 + Standalone + install script |
+            | Windows  | `Artifact_v*_Windows_Setup.exe` | VST3 installer |
+            | macOS    | `Artifact_v*_macOS.pkg` | VST3 + AU installer |
+            | Linux    | `Artifact_v*_Linux.tar.gz` | VST3 + install script |
 
-            ### Installation
-            **Windows:** Run the `.exe` installer. Rescan plugins in your DAW.
-            **macOS:** Open the `.pkg` installer. Rescan plugins in your DAW.
-            **Linux:** Extract the `.tar.gz`, then run `sudo ./install_linux.sh`.
-
-            ### Requirements
-            - 64-bit OS
-            - VST3-compatible DAW (FL Studio, Ableton, Reaper, Logic, etc.)
-            - Windows 10+, macOS 10.13+, or Ubuntu 20.04+
+            **Windows:** Run the `.exe`, rescan plugins in your DAW.
+            **macOS:** Open the `.pkg`, rescan plugins in your DAW.
+            **Linux:** Extract the `.tar.gz`, run `sudo ./install_linux.sh`.
           files: |
             artifacts/windows-installer/*.exe
             artifacts/macos-installer/*.pkg
             artifacts/linux-package/*.tar.gz
-          draft: false
-          prerelease: false
